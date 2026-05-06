@@ -15,18 +15,65 @@ from launch.event_handlers import OnProcessExit, OnProcessStart
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node, SetParameter
 
+X500_MODEL_DEFAULT = 'gz_x500_depth_modify'
+WORLD_DEFAULT = 'cave_simple_03'
+
+CAMERA_LINK_NAME = 'OakD-Lite-Modify/base_link'
+
+RTABMAP_ODOM_TOPIC = '/rtabmap/odom'
+IMU_GZ_TOPIC = '/world/cave_simple_03/model/x500_depth_modify_0/link/base_link/sensor/imu_sensor/imu'
+RGB_CAMERA_GZ_TOPIC = '/rgb_camera'
+DEPTH_CAMERA_GZ_TOPIC = '/depth_camera'
+CAMERA_INFO_GZ_TOPIC = '/camera_info'
+CAMERA_POINTS_GZ_TOPIC = '/depth_camera/points'
+
+IMU_ROS_TOPIC = '/drone/imu'
+RGB_CAMERA_ROS_TOPIC = '/drone/front_rgb'
+DEPTH_CAMERA_ROS_TOPIC = '/drone/front_depth'
+CAMERA_INFO_ROS_TOPIC = '/drone/camera_info'
+CAMERA_POINTS_ROS_TOPIC = '/drone/front_depth/points'
 
 def generate_launch_description():
+    initial_pose = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    model_pose_default = ','.join(str(x) for x in initial_pose)
     px4_dir = LaunchConfiguration('px4_dir')
     model = LaunchConfiguration('model')
     world = LaunchConfiguration('world')
-    model_pose = LaunchConfiguration('model_pose')
+    model_pose = LaunchConfiguration('model_pose', default=model_pose_default)
     sys_autostart = LaunchConfiguration('sys_autostart')
-    clean_start = LaunchConfiguration('clean_start')
     gazebo_startup_delay = LaunchConfiguration('gazebo_startup_delay')
 
     # Apply sim time to every ROS node launched after this action.
     use_sim_time_global = SetParameter(name='use_sim_time', value=True)
+
+    # The integrated cave launch owns the supported RTAB-Map path for this
+    # vehicle, so keep a single shared parameter block aligned with the live
+    # camera frame contract.
+    parameters = [{
+        'use_sim_time': True,
+        'frame_id': CAMERA_LINK_NAME,
+        'approx_sync': False,
+        'queue_size': 10,
+        'sync_queue_size': 10,
+        'odom_sensor_sync': False,
+        'odom_frame_id': 'odom',
+        'visual_odometry': True,
+        'publish_tf': True,
+        'wait_for_transform': 0.2,
+        'wait_imu_to_init': False,
+        'subscribe_depth': True,
+        'subscribe_rgb': True,
+        'subscribe_rgbd': False,
+        'subscribe_odom': True,
+    }]
+
+    remappings = [
+        ('rgb/image', RGB_CAMERA_ROS_TOPIC),
+        ('rgb/camera_info', CAMERA_INFO_ROS_TOPIC),
+        ('depth/image', DEPTH_CAMERA_ROS_TOPIC),
+        ('odom', RTABMAP_ODOM_TOPIC),
+        ('imu', IMU_ROS_TOPIC),
+    ]
 
     gz_env = {
         'PX4_GZ_MODELS': [
@@ -79,7 +126,6 @@ def generate_launch_description():
             ),
         ],
         additional_env=gz_env,
-        condition=IfCondition(clean_start),
         output='screen',
     )
 
@@ -92,39 +138,40 @@ def generate_launch_description():
             '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock',
 
             # Front RGB camera
-            '/world/cave_simple_03/model/x500_depth_0/link/camera_link/'
-            'sensor/IMX214/image@sensor_msgs/msg/Image@gz.msgs.Image',
-            '/world/cave_simple_03/model/x500_depth_0/link/camera_link/'
-            'sensor/IMX214/camera_info'
-            '@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo',
+            # '/world/cave_simple_03/model/x500_depth_0/link/camera_link/'
+            # 'sensor/IMX214/image@sensor_msgs/msg/Image@gz.msgs.Image',
+            # '/world/cave_simple_03/model/x500_depth_0/link/camera_link/'
+            # 'sensor/IMX214/camera_info'
+            # '@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo',
+            f'{RGB_CAMERA_GZ_TOPIC}@sensor_msgs/msg/Image[gz.msgs.Image',
+
+            # Camera info
+            f'{CAMERA_INFO_GZ_TOPIC}@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo',
 
             # Front depth camera
-            '/depth_camera@sensor_msgs/msg/Image@gz.msgs.Image',
-            '/depth_camera/points'
-            '@sensor_msgs/msg/PointCloud2[gz.msgs.PointCloudPacked',
+            f'{DEPTH_CAMERA_GZ_TOPIC}@sensor_msgs/msg/Image[gz.msgs.Image',
+            f'{CAMERA_POINTS_GZ_TOPIC}@sensor_msgs/msg/PointCloud2[gz.msgs.PointCloudPacked',
 
             # IMU
-            '/world/cave_simple_03/model/x500_depth_0/link/base_link/sensor/imu_sensor/imu@sensor_msgs/msg/Imu@gz.msgs.IMU',
+            f'{IMU_GZ_TOPIC}@sensor_msgs/msg/Imu@gz.msgs.IMU',
         ],
         remappings=[
             (
             #     '/world/cave_simple_03/model/x500_depth_0/link/base_link/sensor/imu_sensor/imu',
             #     '/drone/imu',
             # ),
-                '/world/cave_simple_03/model/x500_depth_0/link/camera_link/'
-                'sensor/IMX214/image',
-                '/drone/front_rgb',
+                RGB_CAMERA_GZ_TOPIC,
+                RGB_CAMERA_ROS_TOPIC,
             ),
             (
-                '/world/cave_simple_03/model/x500_depth_0/link/camera_link/'
-                'sensor/IMX214/camera_info',
-                '/drone/camera_info',
+                CAMERA_INFO_GZ_TOPIC,
+                CAMERA_INFO_ROS_TOPIC,
             ),
-            ('/depth_camera', '/drone/front_depth'),
-            ('/depth_camera/points', '/drone/front_depth/points'),
+            (DEPTH_CAMERA_GZ_TOPIC, DEPTH_CAMERA_ROS_TOPIC),
+            (CAMERA_POINTS_GZ_TOPIC, CAMERA_POINTS_ROS_TOPIC),
             (
-                '/world/cave_simple_03/model/x500_depth_0/link/base_link/sensor/imu_sensor/imu',
-                '/drone/imu',
+                IMU_GZ_TOPIC,
+                IMU_ROS_TOPIC,
             ),
         ],
         output='screen',
@@ -142,7 +189,7 @@ def generate_launch_description():
             '0',
             '0',
             'base_link',
-            'camera_link',
+            CAMERA_LINK_NAME,
         ],
         output='screen',
     )
@@ -162,7 +209,6 @@ def generate_launch_description():
             ],
         ],
         additional_env=gz_env,
-        condition=IfCondition(clean_start),
         output='screen',
     )
 
@@ -172,11 +218,10 @@ def generate_launch_description():
             'sim',
             '-g',
         ],
-        condition=IfCondition(clean_start),
         output='screen',
     )
 
-    def px4_process(condition, standalone):
+    def px4_process(standalone):
         additional_env = {
             'PX4_GZ_WORLD': world,
             'PX4_GZ_MODEL_POSE': model_pose,
@@ -192,125 +237,50 @@ def generate_launch_description():
             ],
             cwd=px4_dir,
             additional_env=additional_env,
-            condition=condition,
             output='screen',
         )
 
-    start_px4 = px4_process(UnlessCondition(clean_start), standalone=False)
     start_px4_after_world = px4_process(
-        IfCondition(clean_start),
         standalone=True,
     )
 
-    gz_to_px4_odom = Node(
-        package='cave_exploration',
-        executable='gz_to_px4_odom',
-        name='gz_to_px4_odom',
-        condition=LaunchConfigurationEquals('odom_source', 'gz'),
-        output='screen',
-    )
-
-    rgbd_odometry = Node(
+    rtabmap_odom = Node(
         package='rtabmap_odom',
         executable='rgbd_odometry',
         name='rtabmap_rgbd_odometry',
-        condition=LaunchConfigurationEquals('odom_source', 'rtabmap'),
-        parameters=[{
-            'use_sim_time': True,
-            'frame_id': 'base_link',
-            'odom_frame_id': 'odom',
-            'publish_tf': True,
-            'approx_sync': True,
-            'queue_size': 5,
-            'sync_queue_size': 5,
-            'wait_imu_to_init': False,
-        }],
-        remappings=[
-            ('rgb/image', '/drone/front_rgb'),
-            ('rgb/camera_info', '/drone/camera_info'),
-            ('depth/image', '/drone/front_depth'),
-            ('imu', '/drone/imu'),
-            ('odom', '/rtabmap/odom'),
-        ],
+        parameters=parameters,
+        remappings=remappings,
         output='screen',
     )
 
-    rtabmap_common_parameters = [{
-        'use_sim_time': True,
-        'frame_id': 'base_link',
-        'odom_frame_id': 'odom',
-        'subscribe_depth': True,
-        'subscribe_rgb': True,
-        'subscribe_rgbd': False,
-        #'subscribe_odom': True,
-        'visual_odometry':True,
-        'approx_sync': True,
-        'queue_size': 5,
-        'sync_queue_size': 5,
-        'wait_for_transform': 0.2,
-    }]
-
-    rtabmap = Node(
+    rtabmap_slam = Node(
         package='rtabmap_slam',
         executable='rtabmap',
         name='rtabmap',
-        condition=LaunchConfigurationEquals('odom_source', 'rtabmap'),
         output='screen',
         arguments=['-d'],
-        parameters=rtabmap_common_parameters,
-        remappings=[
-            ('rgb/image', '/drone/front_rgb'),
-            ('rgb/camera_info', '/drone/camera_info'),
-            ('depth/image', '/drone/front_depth'),
-            ('odom', '/rtabmap/odom'),
-        ],
+        parameters=parameters,
+        remappings=remappings
     )
 
     rtabmap_viz = Node(
         package='rtabmap_viz',
         executable='rtabmap_viz',
         name='rtabmap_viz',
-        condition=LaunchConfigurationEquals('odom_source', 'rtabmap'),
         output='screen',
-        parameters=rtabmap_common_parameters,
-        remappings=[
-            ('rgb/image', '/drone/front_rgb'),
-            ('rgb/camera_info', '/drone/camera_info'),
-            ('depth/image', '/drone/front_depth'),
-            ('odom', '/rtabmap/odom'),
-        ],
+        parameters=parameters,
+        remappings=remappings,
     )
 
     rtabmap_to_px4_odom = Node(
         package='cave_exploration',
         executable='ros_odom_to_px4_odom',
         name='rtabmap_odom_to_px4',
-        condition=LaunchConfigurationEquals('odom_source', 'rtabmap'),
         parameters=[{
-            'odom_topic': '/rtabmap/odom',
+            'odom_topic': RTABMAP_ODOM_TOPIC,
             'publish_rate_hz': 30.0,
         }],
         output='screen',
-    )
-
-    start_bridge_after_px4 = RegisterEventHandler(
-        OnProcessStart(
-            target_action=start_px4,
-            on_start=[
-                TimerAction(
-                    period=8.0,
-                    actions=[
-                        bridge,
-                        camera_static_tf,
-                        gz_to_px4_odom,
-                        rgbd_odometry,
-                        rtabmap,
-                        rtabmap_viz,
-                        rtabmap_to_px4_odom,
-                    ],
-                )
-            ],
-        )
     )
 
     start_bridge_after_clean_px4 = RegisterEventHandler(
@@ -322,9 +292,8 @@ def generate_launch_description():
                     actions=[
                         bridge,
                         camera_static_tf,
-                        gz_to_px4_odom,
-                        rgbd_odometry,
-                        rtabmap,
+                        rtabmap_odom,
+                        rtabmap_slam,
                         rtabmap_viz,
                         rtabmap_to_px4_odom,
                     ],
@@ -333,7 +302,7 @@ def generate_launch_description():
         )
     )
 
-    start_px4_after_cleanup = RegisterEventHandler(
+    start_gazebo_server_after_cleanup = RegisterEventHandler(
         OnProcessExit(
             target_action=cleanup_sim,
             on_exit=[start_gazebo_server],
@@ -369,46 +338,26 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'model',
-            default_value='gz_x500_depth',
+            default_value=X500_MODEL_DEFAULT,
             description='PX4 Gazebo model target passed to make px4_sitl.',
         ),
         DeclareLaunchArgument(
             'world',
-            default_value='cave_simple_03',
+            default_value=WORLD_DEFAULT,
             description='PX4 Gazebo world name (without .sdf).',
         ),
         DeclareLaunchArgument(
             'model_pose',
-            default_value='0,0,2,0,0,1.57',
+            default_value=model_pose_default,
             description='PX4 spawn pose x,y,z,roll,pitch,yaw.',
         ),
         DeclareLaunchArgument(
             'sys_autostart',
-            default_value='4001',
+            default_value='4022',
             description=(
                 'PX4 SYS_AUTOSTART airframe ID. '
-                'Set this to your custom airframe/startup script ID for '
-                'cave flight.'
-            ),
-        ),
-        DeclareLaunchArgument(
-            'odom_source',
-            default_value='gz',
-            choices=['gz', 'rtabmap'],
-            description=(
-                'Odometry source for PX4 external vision. '
-                'gz uses Gazebo truth; rtabmap uses RGB-D odometry from '
-                'the simulated sensors.'
-            ),
-        ),
-        DeclareLaunchArgument(
-            'clean_start',
-            default_value='true',
-            choices=['true', 'false'],
-            description=(
-                'Kill stale PX4/Gazebo/bridge processes before startup. '
-                'Use false only when intentionally attaching to an existing '
-                'Gazebo session.'
+                'Defaults to the cave RTAB-Map/external-vision airframe used '
+                'by this integrated launch.'
             ),
         ),
         DeclareLaunchArgument(
@@ -416,16 +365,14 @@ def generate_launch_description():
             default_value='20.0',
             description=(
                 'Seconds to let the cave world load before PX4 spawns the '
-                'drone in clean_start mode.'
+                'drone.'
             ),
         ),
 
         # Global sim time for all ROS nodes
         use_sim_time_global,
         cleanup_sim,
-        start_px4,
-        start_px4_after_cleanup,
+        start_gazebo_server_after_cleanup,
         start_px4_after_gazebo,
-        start_bridge_after_px4,
         start_bridge_after_clean_px4,
     ])
