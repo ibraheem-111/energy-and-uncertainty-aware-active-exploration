@@ -29,6 +29,10 @@
     <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
       <render_engine>ogre2</render_engine>
     </plugin>
+    <plugin filename="gz-sim-imu-system" name="gz::sim::systems::Imu"/>
+    <plugin filename="gz-sim-air-pressure-system" name="gz::sim::systems::AirPressure"/>
+    <plugin filename="gz-sim-magnetometer-system" name="gz::sim::systems::Magnetometer"/>
+    <plugin filename="gz-sim-navsat-system" name="gz::sim::systems::NavSat"/> 
 
     <!-- The staging area -->
     <include>
@@ -496,7 +500,7 @@
     </wind>
 
     <!-- Load the plugin for the wind -->
-    <plugin name="ignition::gazebo::systems::WindEffects" filename="libignition-gazebo-wind-effects-system.so">
+    <!-- <plugin name="ignition::gazebo::systems::WindEffects" filename="libignition-gazebo-wind-effects-system.so">
       <horizontal>
         <magnitude>
           <time_for_rise>10</time_for_rise>
@@ -527,6 +531,6 @@
          <stddev>0.03</stddev>
         </noise>
       </vertical>
-    </plugin>
+    </plugin> -->
   </world>
 </sdf>
