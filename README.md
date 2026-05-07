@@ -1,5 +1,114 @@
 # Energy Aware Active Exploration of Caves Using a Drone
 
+## Demo Quick Start
+
+Always start from the workspace root and source the configured environment first:
+
+```bash
+cd /home/ibraheem/ros2_ws
+source ros_env.sh
+```
+
+### 1. Deploy Updated PX4 Models
+
+Run this after model/SDF changes such as the drone spotlight:
+
+```bash
+cd /home/ibraheem/ros2_ws
+source ros_env.sh
+bash src/cave_exploration/scripts/deploy_px4_model_modify.sh
+```
+
+Fully restart Gazebo/PX4 after deploying. Already-spawned drones will not update in place.
+
+### 2. Launch Gazebo And Bridges
+
+Normal RGB-D drone:
+
+```bash
+cd /home/ibraheem/ros2_ws
+source ros_env.sh
+ros2 launch cave_exploration gazebo_bridges.launch.py
+```
+
+2D lidar drone for lidar obstacle avoidance:
+
+```bash
+cd /home/ibraheem/ros2_ws
+source ros_env.sh
+ros2 launch cave_exploration gazebo_lidar_visual_bridges.launch.py
+```
+
+### 3. Launch RTAB-Map
+
+Use the RGB-D RTAB-Map path for the demo:
+
+```bash
+cd /home/ibraheem/ros2_ws
+source ros_env.sh
+ros2 launch cave_exploration rtabmap.launch.py
+```
+
+### 4. Bridge RTAB-Map Odometry Into PX4
+
+Run this in its own terminal. PX4 will not get external vision without it.
+
+```bash
+cd /home/ibraheem/ros2_ws
+source ros_env.sh
+ros2 run cave_exploration ros_odom_to_px4_odom --ros-args -p odom_topic:=/rtabmap/odom
+```
+
+### 5. Launch RViz With Demo Configuration
+
+This loads the map, exploration markers, lidar scan, and depth points:
+
+```bash
+cd /home/ibraheem/ros2_ws
+source ros_env.sh
+ros2 launch cave_exploration rviz_demo.launch.py
+```
+
+If markers do not line up, change RViz `Global Options -> Fixed Frame` to `map`, `odom`, or `base_link`, matching the `marker_frame_id` used by the offboard node.
+
+### 6. Run Autonomous Exploration Offboard Node
+
+For the 2D lidar demo:
+
+```bash
+cd /home/ibraheem/ros2_ws
+source ros_env.sh
+ros2 run cave_exploration exploration_offboard --ros-args \
+  -p auto_engage:=true \
+  -p lidar_obstacle_avoidance_enabled:=true \
+  -p marker_frame_id:=map \
+  -p entry_distance_m:=1.5 \
+  -p setpoint_speed_mps:=0.15 \
+  -p scripted_forward_step_m:=0.8 \
+  -p scripted_lateral_step_m:=0.3 \
+  -p scripted_waypoint_count:=4
+```
+
+If RViz markers use `odom` instead of `map`, run the node with:
+
+```bash
+-p marker_frame_id:=odom
+```
+
+Expected phase logs:
+
+```text
+WAIT_FOR_VALID_STATE
+WARMUP
+REQUESTING_OFFBOARD
+REQUESTING_ARM
+VERTICAL_TAKEOFF
+POST_TAKEOFF_SETTLE
+ENTER_CAVE
+FRONTIER_EXPLORE or SCRIPTED_EXPLORE_*
+RETURN_HOME
+```
+
 This package owns the integrated cave simulation workflow for:
 
 - Gazebo world: `cave_simple_03`
@@ -8,13 +117,19 @@ This package owns the integrated cave simulation workflow for:
 - ROS external-vision bridge: `ros_odom_to_px4_odom`
 - RTAB-Map frame contract: `OakD-Lite-Modify/base_link`
 
-The supported path is one launch file:
+The supported integrated path is one launch file:
 
 ```bash
 ros2 launch cave_exploration cave.launch.py
 ```
 
-Do not launch `launch/rtabmap.launch.py` separately when using the integrated cave flow. `cave.launch.py` already starts Gazebo, PX4, the ROS/Gazebo bridges, `rtabmap_rgbd_odometry`, `rtabmap`, `rtabmap_viz`, and the ROS-to-PX4 visual odometry bridge.
+`cave.launch.py` starts Gazebo, PX4, the ROS/Gazebo bridges, `rtabmap_rgbd_odometry`, `rtabmap`, `rtabmap_viz`, and the ROS-to-PX4 visual odometry bridge.
+
+For estimator debugging, there is now also a split workflow:
+
+- `gazebo_bridges.launch.py` for Gazebo plus `ros_gz_bridge` only
+- manual PX4 startup in its own terminal
+- `rtabmap.launch.py` for RTAB-Map odometry and slam only
 
 ## What Changed
 
@@ -91,9 +206,37 @@ Useful overrides:
 ros2 launch cave_exploration cave.launch.py gazebo_startup_delay:=25.0
 ros2 launch cave_exploration cave.launch.py model_pose:=0,0,2,0,0,0
 ros2 launch cave_exploration cave.launch.py px4_dir:=/path/to/PX4-Autopilot
+ros2 launch cave_exploration cave.launch.py no_rtabmap:=true
 ```
 
 The launch already performs stale-process cleanup before starting Gazebo and PX4. That cleanup plus the default `gazebo_startup_delay:=20.0` is the intended deterministic startup path.
+
+## Split Workflow
+
+Use this when you want Gazebo, PX4, and RTAB-Map in separate terminals so `pxh>` stays directly interactive.
+
+Terminal 1:
+
+```bash
+cd /home/ibraheem/ros2_ws
+source install/setup.bash
+ros2 launch cave_exploration gazebo_bridges.launch.py
+```
+
+Terminal 2:
+
+```bash
+cd $HOME/PX4-Autopilot
+make px4_sitl gz_x500_depth_modify
+```
+
+Terminal 3:
+
+```bash
+cd /home/ibraheem/ros2_ws
+source install/setup.bash
+ros2 launch cave_exploration rtabmap.launch.py
+```
 
 ## Runtime Validation
 
