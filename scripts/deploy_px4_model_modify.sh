@@ -71,6 +71,8 @@ echo "Deploying model files to PX4-Autopilot..."
 echo "Copying airframe files..."
 cp "$PACKAGE_DIR/models/airframes/4022_gz_x500_depth_modify" \
    "$PX4_DIR/ROMFS/px4fmu_common/init.d-posix/airframes/"
+cp "$PACKAGE_DIR/models/airframes/4024_gz_x500_depth_modify_lidar_2d" \
+   "$PX4_DIR/ROMFS/px4fmu_common/init.d-posix/airframes/"
 # cp "$PACKAGE_DIR/models/px4_models/airframes/4022_gz_x500_oaklite" \
 #    "$PX4_DIR/ROMFS/px4fmu_common/init.d-posix/airframes/"
 
@@ -82,6 +84,13 @@ if [ -f "$PX4_AIRFRAME_CMAKELISTS" ]; then
         sed -i '/^\s*4019_gz_x500_gimbal\s*$/a\	4022_gz_x500_depth_modify' "$PX4_AIRFRAME_CMAKELISTS"
     else
         echo "4022_gz_x500_depth_modify already present in PX4 airframe CMakeLists.txt"
+    fi
+
+    if ! grep -q "4024_gz_x500_depth_modify_lidar_2d" "$PX4_AIRFRAME_CMAKELISTS"; then
+        echo "Adding 4024_gz_x500_depth_modify_lidar_2d to PX4 airframe CMakeLists.txt"
+        sed -i '/^\s*)\s*$/i\	4024_gz_x500_depth_modify_lidar_2d' "$PX4_AIRFRAME_CMAKELISTS"
+    else
+        echo "4024_gz_x500_depth_modify_lidar_2d already present in PX4 airframe CMakeLists.txt"
     fi
 else
     echo "Warning: PX4 airframe CMakeLists.txt not found at $PX4_AIRFRAME_CMAKELISTS"
@@ -97,6 +106,14 @@ if [ -d "$PACKAGE_DIR/models/gz_models/x500_depth_modify" ]; then
           "$PX4_DIR/Tools/simulation/gz/models/"
 else
     echo "Warning: x500_depth_modify model not found in package"
+fi
+
+if [ -d "$PACKAGE_DIR/models/gz_models/x500_depth_modify_lidar_2d" ]; then
+    rm -rf "$PX4_DIR/Tools/simulation/gz/models/x500_depth_modify_lidar_2d"
+    cp -r "$PACKAGE_DIR/models/gz_models/x500_depth_modify_lidar_2d" \
+          "$PX4_DIR/Tools/simulation/gz/models/"
+else
+    echo "Warning: x500_depth_modify_lidar_2d model not found in package"
 fi
 
 # Copy OakD-Lite model

@@ -1,0 +1,154 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<sdf version='1.9'>
+  <model name='x500_depth_modify_lidar_2d'>
+    <include merge='true'>
+      <uri>x500</uri>
+    </include>
+
+    <include merge='true'>
+      <uri>model://OakD-Lite-Modify</uri>
+      <pose>0.12 0.03 0.242 0 0 0</pose>
+    </include>
+
+    <joint name="CameraJoint" type="fixed">
+      <parent>base_link</parent>
+      <child>OakD-Lite-Modify/base_link</child>
+      <pose relative_to="base_link">0.12 0.03 0.242 0 0 0</pose>
+    </joint>
+
+    <link name="front_spotlight_link">
+      <pose relative_to="base_link">0.28 0 -0.03 0 0 0</pose>
+      <inertial>
+        <mass>0.01</mass>
+        <inertia>
+          <ixx>0.000001</ixx>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyy>0.000001</iyy>
+          <iyz>0</iyz>
+          <izz>0.000001</izz>
+        </inertia>
+      </inertial>
+      <visual name="front_spotlight_visual">
+        <geometry>
+          <sphere>
+            <radius>0.035</radius>
+          </sphere>
+        </geometry>
+        <material>
+          <ambient>1 0.95 0.65 1</ambient>
+          <diffuse>1 0.95 0.65 1</diffuse>
+          <emissive>1 0.95 0.65 1</emissive>
+        </material>
+      </visual>
+      <light name="front_spotlight" type="spot">
+        <pose>0 0 0 0 0 0</pose>
+        <diffuse>1 1 0.85 1</diffuse>
+        <specular>0.8 0.8 0.6 1</specular>
+        <attenuation>
+          <range>35</range>
+          <constant>0.2</constant>
+          <linear>0.005</linear>
+          <quadratic>0.0005</quadratic>
+        </attenuation>
+        <direction>1 0 -0.1</direction>
+        <spot>
+          <inner_angle>0.45</inner_angle>
+          <outer_angle>1.0</outer_angle>
+          <falloff>0.5</falloff>
+        </spot>
+        <cast_shadows>true</cast_shadows>
+      </light>
+    </link>
+    <joint name="FrontSpotlightJoint" type="fixed">
+      <parent>base_link</parent>
+      <child>front_spotlight_link</child>
+    </joint>
+
+    <!-- The lidar body and sensor characteristics are copied from the stock
+         PX4 lidar_2d_v2 model, but mounted directly on this custom airframe
+         with stable frame and topic names for ROS integration. -->
+    <link name="lidar_2d_link">
+      <pose relative_to="base_link">-0.1 0.0 0.26 0 0 0</pose>
+      <inertial>
+        <pose>0 0 0.0435 0 0 0</pose>
+        <mass>0.37</mass>
+        <inertia>
+          <ixx>0.00034437749999999994</ixx>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyy>0.00034437749999999994</iyy>
+          <iyz>0</iyz>
+          <izz>0.00022199999999999998</izz>
+        </inertia>
+      </inertial>
+      <collision name="collision_base">
+        <pose>0 0 0.0205 0 0 0</pose>
+        <geometry>
+          <box>
+            <size>0.06 0.06 0.041</size>
+          </box>
+        </geometry>
+      </collision>
+      <collision name="collision_mid">
+        <pose>0 0 0.055 0 0 0</pose>
+        <geometry>
+          <cylinder>
+            <radius>0.025</radius>
+            <length>0.028</length>
+          </cylinder>
+        </geometry>
+      </collision>
+      <collision name="collision_top">
+        <pose>0 0 0.078 0 0 0</pose>
+        <geometry>
+          <box>
+            <size>0.056 0.056 0.018</size>
+          </box>
+        </geometry>
+      </collision>
+      <visual name="visual">
+        <geometry>
+          <mesh>
+            <uri>model://lidar_2d_v2/meshes/lidar_2d_v2.dae</uri>
+          </mesh>
+        </geometry>
+      </visual>
+      <sensor name="lidar_2d_v2" type="gpu_lidar">
+        <gz_frame_id>lidar_2d_link</gz_frame_id>
+        <topic>lidar_scan</topic>
+        <pose>0 0 0.055 0 0 0</pose>
+        <ray>
+          <scan>
+            <horizontal>
+              <samples>1080</samples>
+              <resolution>1</resolution>
+              <min_angle>-2.356195</min_angle>
+              <max_angle>2.356195</max_angle>
+            </horizontal>
+          </scan>
+          <range>
+            <min>0.1</min>
+            <max>30</max>
+            <resolution>0.01</resolution>
+          </range>
+          <noise>
+            <type>gaussian</type>
+            <mean>0.0</mean>
+            <stddev>0.001</stddev>
+          </noise>
+        </ray>
+        <always_on>1</always_on>
+        <update_rate>30</update_rate>
+        <visualize>false</visualize>
+      </sensor>
+      <gravity>true</gravity>
+      <velocity_decay/>
+    </link>
+
+    <joint name="LidarJoint" type="fixed">
+      <parent>base_link</parent>
+      <child>lidar_2d_link</child>
+    </joint>
+  </model>
+</sdf>

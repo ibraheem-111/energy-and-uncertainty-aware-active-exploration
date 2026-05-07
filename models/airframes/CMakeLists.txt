@@ -94,6 +94,7 @@ px4_add_romfs_files(
 	4021_gz_x500_flow
 	4022_gz_x500_depth_mono
 	4023_gz_x500_depth_modify
+	4024_gz_x500_depth_modify_lidar_2d
 
 	6011_gazebo-classic_typhoon_h480
 	6011_gazebo-classic_typhoon_h480.post
