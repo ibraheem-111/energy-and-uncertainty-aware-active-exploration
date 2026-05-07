@@ -33,6 +33,7 @@ setup(
             'gz_to_px4_odom = cave_exploration.gz_to_px4_odom:main',
             'ros_odom_to_px4_odom = cave_exploration.ros_odom_to_px4_odom:main',
             'exploration_offboard = cave_exploration.exploration_offboard:main',
+            'compare_exploration_logs = cave_exploration.compare_exploration_logs:main',
         ],
     },
 )

@@ -11,11 +11,20 @@ PX4_SIM_MODEL=${PX4_SIM_MODEL:=x500_depth_modify_lidar_2d}
 
 # GNSS-denied cave flight defaults: fuse external vision and allow arming
 # without GPS while keeping the rest of the x500 baseline unchanged.
-param set-default EKF2_GPS_CTRL 0
-param set-default EKF2_EV_CTRL 15
-param set-default EKF2_HGT_REF 3
-param set-default EKF2_MAG_TYPE 5
-param set-default COM_ARM_WO_GPS 1
-param set-default COM_DL_LOSS_T 10
-param set-default NAV_DLL_ACT 0
-param set-default SYS_HAS_MAG 0
+param set EKF2_GPS_CTRL 0
+param set EKF2_EV_CTRL 15
+param set EKF2_HGT_REF 3
+param set EKF2_MAG_TYPE 5
+param set COM_ARM_WO_GPS 1
+param set COM_DL_LOSS_T 10
+param set NAV_DLL_ACT 0
+param set SYS_HAS_MAG 0
+
+# Demo cave runs use simulated battery and external offboard control. Keep low
+# battery/offboard-loss events from forcing an immediate autonomous landing.
+param set COM_LOW_BAT_ACT 0
+param set BAT_LOW_THR 0.12
+param set BAT_CRIT_THR 0.05
+param set BAT_EMERGEN_THR 0.03
+param set COM_OF_LOSS_T 5
+param set COM_OBL_RC_ACT 5

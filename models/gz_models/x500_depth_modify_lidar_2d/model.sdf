@@ -17,7 +17,7 @@
     </joint>
 
     <link name="front_spotlight_link">
-      <pose relative_to="base_link">0.28 0 -0.12 0 0 0</pose>
+      <pose relative_to="base_link">0.12 0 -0.10 0 0 0</pose>
       <inertial>
         <mass>0.01</mass>
         <inertia>
@@ -69,7 +69,7 @@
          PX4 lidar_2d_v2 model, but mounted directly on this custom airframe
          with stable frame and topic names for ROS integration. -->
     <link name="lidar_2d_link">
-      <pose relative_to="base_link">-0.1 0.0 0.26 0 0 0</pose>
+      <pose relative_to="base_link">-0.1 0.0 0.03 0 0 0</pose>
       <inertial>
         <pose>0 0 0.0435 0 0 0</pose>
         <mass>0.37</mass>

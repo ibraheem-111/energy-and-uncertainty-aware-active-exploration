@@ -89,6 +89,62 @@ ros2 run cave_exploration exploration_offboard --ros-args \
   -p scripted_waypoint_count:=4
 ```
 
+For MPPI-style local planning around rocks while still targeting frontiers:
+
+```bash
+cd /home/ibraheem/ros2_ws
+source ros_env.sh
+ros2 launch cave_exploration exploration_mppi.launch.py
+```
+
+This launch defaults to `entry_distance_m:=10.0` before switching to frontier MPPI.
+
+### 7. Collect Frontier Vs MPPI Exploration Data
+
+Each run automatically stops after 300 seconds and writes a CSV to
+`/home/ibraheem/ros2_ws/exploration_logs` with PX4 pose, travel distance,
+battery, phase, map coverage, frontier counts, and RTAB-Map odometry features.
+
+Frontier-only baseline:
+
+```bash
+cd /home/ibraheem/ros2_ws
+source ros_env.sh
+ros2 launch cave_exploration exploration_mppi.launch.py \
+  mppi_enabled:=false \
+  experiment_label:=frontier_baseline
+```
+
+MPPI run:
+
+```bash
+cd /home/ibraheem/ros2_ws
+source ros_env.sh
+ros2 launch cave_exploration exploration_mppi.launch.py \
+  mppi_enabled:=true \
+  experiment_label:=mppi
+```
+
+Use `known_area_m2`, `free_area_m2`, `frontier_cells`, and
+`features_detected`, `max_features_detected`, `mean_features_detected`, and
+`travel_distance_m` from the CSVs to compare exploration efficiency and visual
+feature richness.
+
+Print a quick comparison table:
+
+```bash
+cd /home/ibraheem/ros2_ws
+source ros_env.sh
+ros2 run cave_exploration compare_exploration_logs
+```
+
+Useful overrides:
+
+```bash
+ros2 launch cave_exploration exploration_mppi.launch.py mppi_robot_radius_m:=0.65 setpoint_speed_mps:=0.10
+ros2 launch cave_exploration exploration_mppi.launch.py marker_frame_id:=odom
+```
+
 If RViz markers use `odom` instead of `map`, run the node with:
 
 ```bash
