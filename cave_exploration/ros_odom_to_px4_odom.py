@@ -4,11 +4,9 @@ from typing import Optional, Tuple
 
 import numpy as np
 import rclpy
-from rclpy.node import Node
+from nav_msgs.msg import Odometry
 from px4_msgs.msg import VehicleOdometry
-
-from gz.transport13 import Node as GzNode
-from gz.msgs10.pose_v_pb2 import Pose_V
+from rclpy.node import Node
 
 
 def quat_xyzw_to_rotmat(x: float, y: float, z: float, w: float) -> np.ndarray:
@@ -19,9 +17,21 @@ def quat_xyzw_to_rotmat(x: float, y: float, z: float, w: float) -> np.ndarray:
     x, y, z, w = q / n
 
     return np.array([
-        [1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - z * w),     2.0 * (x * z + y * w)],
-        [2.0 * (x * y + z * w),       1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - x * w)],
-        [2.0 * (x * z - y * w),       2.0 * (y * z + x * w),     1.0 - 2.0 * (x * x + y * y)],
+        [
+            1.0 - 2.0 * (y * y + z * z),
+            2.0 * (x * y - z * w),
+            2.0 * (x * z + y * w),
+        ],
+        [
+            2.0 * (x * y + z * w),
+            1.0 - 2.0 * (x * x + z * z),
+            2.0 * (y * z - x * w),
+        ],
+        [
+            2.0 * (x * z - y * w),
+            2.0 * (y * z + x * w),
+            1.0 - 2.0 * (x * x + y * y),
+        ],
     ])
 
 
@@ -86,61 +96,81 @@ def enu_flu_to_ned_frd(
     return pos_ned, quat_ned_frd
 
 
-class GzPoseToPx4(Node):
+class RosOdomToPx4(Node):
     def __init__(self):
-        super().__init__("gz_pose_to_px4")
+        super().__init__("ros_odom_to_px4")
 
-        self.declare_parameter("model_name", "x500_depth_modify_0")
-        self.declare_parameter("gz_topic", "/world/cave_simple_03/dynamic_pose/info")
+        self.declare_parameter("odom_topic", "/rtabmap/odom")
         self.declare_parameter("publish_rate_hz", 30.0)
+        self.declare_parameter("quality", 80)
+        self.declare_parameter("position_variance", [0.05, 0.05, 0.08])
+        self.declare_parameter("orientation_variance", [0.03, 0.03, 0.05])
+        self.declare_parameter("velocity_variance", [0.10, 0.10, 0.15])
 
-        self.model_name = self.get_parameter("model_name").value
-        self.gz_topic = self.get_parameter("gz_topic").value
-        self.publish_rate_hz = float(self.get_parameter("publish_rate_hz").value)
+        self.odom_topic = self.get_parameter("odom_topic").value
+        publish_rate = self.get_parameter("publish_rate_hz").value
+        self.publish_rate_hz = float(publish_rate)
+        self.quality = int(self.get_parameter("quality").value)
+        self.position_variance = list(
+            self.get_parameter("position_variance").value
+        )
+        self.orientation_variance = list(
+            self.get_parameter("orientation_variance").value
+        )
+        self.velocity_variance = list(
+            self.get_parameter("velocity_variance").value
+        )
 
         self.pub = self.create_publisher(
             VehicleOdometry,
             "/fmu/in/vehicle_visual_odometry",
             10,
         )
+        self.sub = self.create_subscription(
+            Odometry,
+            self.odom_topic,
+            self.odom_callback,
+            10,
+        )
 
         self.lock = threading.Lock()
         self.latest_position_ned: Optional[np.ndarray] = None
         self.latest_quat_ned_frd: Optional[np.ndarray] = None
+        self.latest_stamp_us: Optional[int] = None
         self.last_position_ned: Optional[np.ndarray] = None
         self.last_stamp_us: Optional[int] = None
-        self.sim_time_us: int = 0
 
-        self.gz_node = GzNode()
-        ok = self.gz_node.subscribe(Pose_V,self.gz_topic, self._gz_pose_callback)
-        if not ok:
-            raise RuntimeError(f"Failed to subscribe to {self.gz_topic}")
-
-        self.timer = self.create_timer(1.0 / self.publish_rate_hz, self.publish_odom)
-
-        self.get_logger().info(f"Listening to: {self.gz_topic}")
-        self.get_logger().info(f"Publishing to: /fmu/in/vehicle_visual_odometry")
-        self.get_logger().info(f"Model: {self.model_name}")
-
-    def _gz_pose_callback(self, msg: Pose_V):
-        pose = None
-        for p in msg.pose:
-            if p.name == self.model_name:
-                pose = p
-                break
-        if pose is None:
-            return
-
-        pos_enu = np.array([pose.position.x, pose.position.y, pose.position.z], dtype=float)
-        quat_enu_flu = np.array(
-            [pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w],
-            dtype=float,
+        self.timer = self.create_timer(
+            1.0 / self.publish_rate_hz,
+            self.publish_odom,
         )
 
+        self.get_logger().info(f"Listening to: {self.odom_topic}")
+        self.get_logger().info(
+            "Publishing to: /fmu/in/vehicle_visual_odometry"
+        )
+
+    def odom_callback(self, msg: Odometry):
+        pose = msg.pose.pose
+        pos_enu = np.array(
+            [pose.position.x, pose.position.y, pose.position.z],
+            dtype=float,
+        )
+        quat_enu_flu = np.array(
+            [
+                pose.orientation.x,
+                pose.orientation.y,
+                pose.orientation.z,
+                pose.orientation.w,
+            ],
+            dtype=float,
+        )
         pos_ned, quat_ned_frd = enu_flu_to_ned_frd(pos_enu, quat_enu_flu)
 
-        # Use Gazebo sim time if available; otherwise ROS time is okay for testing.
-        stamp_us = self.sim_time_us
+        stamp_us = int(
+            (msg.header.stamp.sec * 1_000_000)
+            + (msg.header.stamp.nanosec // 1000)
+        )
         if stamp_us == 0:
             stamp_us = int(self.get_clock().now().nanoseconds // 1000)
 
@@ -151,14 +181,20 @@ class GzPoseToPx4(Node):
 
     def publish_odom(self):
         with self.lock:
-            if self.latest_position_ned is None or self.latest_quat_ned_frd is None:
+            if (
+                self.latest_position_ned is None
+                or self.latest_quat_ned_frd is None
+            ):
                 return
 
             position = self.latest_position_ned.copy()
             quat = self.latest_quat_ned_frd.copy()
             stamp_us = int(self.latest_stamp_us)
 
-            if self.last_position_ned is not None and self.last_stamp_us is not None:
+            if (
+                self.last_position_ned is not None
+                and self.last_stamp_us is not None
+            ):
                 dt = max((stamp_us - self.last_stamp_us) * 1e-6, 1e-6)
                 vel_ned = (position - self.last_position_ned) / dt
             else:
@@ -172,27 +208,37 @@ class GzPoseToPx4(Node):
         msg.timestamp_sample = stamp_us
         msg.pose_frame = VehicleOdometry.POSE_FRAME_NED
         msg.velocity_frame = VehicleOdometry.VELOCITY_FRAME_NED
-
-        msg.position = [float(position[0]), float(position[1]), float(position[2])]
-        msg.q = [float(quat[3]), float(quat[0]), float(quat[1]), float(quat[2])]
-        msg.velocity = [float(vel_ned[0]), float(vel_ned[1]), float(vel_ned[2])]
-        msg.angular_velocity = [0.0, 0.0, 0.0]
-
-        msg.position_variance = [0.01, 0.01, 0.01]
-        msg.orientation_variance = [0.01, 0.01, 0.01]
-        msg.velocity_variance = [0.05, 0.05, 0.05]
+        msg.position = [
+            float(position[0]),
+            float(position[1]),
+            float(position[2]),
+        ]
+        msg.q = [
+            float(quat[3]),
+            float(quat[0]),
+            float(quat[1]),
+            float(quat[2]),
+        ]
+        msg.velocity = [
+            float(vel_ned[0]),
+            float(vel_ned[1]),
+            float(vel_ned[2]),
+        ]
+        msg.angular_velocity = [math.nan, math.nan, math.nan]
+        msg.position_variance = [float(v) for v in self.position_variance]
+        msg.orientation_variance = [
+            float(v) for v in self.orientation_variance
+        ]
+        msg.velocity_variance = [float(v) for v in self.velocity_variance]
         msg.reset_counter = 0
-        msg.quality = 100
+        msg.quality = self.quality
 
         self.pub.publish(msg)
 
 
 def main(args=None):
-    print(Pose_V)
-    print(type(Pose_V))
-    print(hasattr(Pose_V, "DESCRIPTOR"))
     rclpy.init(args=args)
-    node = GzPoseToPx4()
+    node = RosOdomToPx4()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

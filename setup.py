@@ -13,6 +13,7 @@ setup(
             ['resource/' + package_name]),
         (share_dir, ['package.xml']),
         (share_dir + '/launch', glob('launch/*.py')),
+        (share_dir + '/rviz', glob('rviz/*.rviz')),
         (share_dir + '/cave_simple_03', glob('cave_simple_03/*.sdf')),
         (share_dir + '/cave_simple_03', glob('cave_simple_03/*.dot')),
     ],
@@ -29,6 +30,9 @@ setup(
     },
     entry_points={
         'console_scripts': [
+            'gz_to_px4_odom = cave_exploration.gz_to_px4_odom:main',
+            'ros_odom_to_px4_odom = cave_exploration.ros_odom_to_px4_odom:main',
+            'exploration_offboard = cave_exploration.exploration_offboard:main',
         ],
     },
 )

@@ -12,8 +12,10 @@ CAMERA_INFO_ROS_TOPIC = '/drone/camera_info'
 
 parameters = [{
     'use_sim_time': LaunchConfiguration('use_sim_time'),
-    'frame_id': CAMERA_LINK_NAME,
-    'approx_sync': False,
+    'frame_id': 'base_link',
+    'approx_sync': True,
+    'approx_sync_max_interval': 0.05,
+    'topic_queue_size': 10,
     'queue_size': 10,
     'sync_queue_size': 10,
     'odom_sensor_sync': False,
@@ -21,7 +23,9 @@ parameters = [{
     'visual_odometry': True,
     'publish_tf': True,
     'wait_for_transform': 0.2,
-    'wait_imu_to_init': False,
+    'wait_imu_to_init': True,
+    'always_check_imu_tf': True,
+    'qos_imu': 0,
     'subscribe_depth': True,
     'subscribe_rgb': True,
     'subscribe_rgbd': False,
@@ -45,6 +49,22 @@ def generate_launch_description():
             description='Use simulation time'
         ),
         Node(
+            package='tf2_ros',
+            executable='static_transform_publisher',
+            name='camera_link_static_tf',
+            arguments=[
+                '0.12',
+                '0.03',
+                '0.242',
+                '-1.57079632679',
+                '0',
+                '-1.57079632679',
+                'base_link',
+                CAMERA_LINK_NAME,
+            ],
+            output='screen',
+        ),
+        Node(
             package='rtabmap_odom',
             executable='rgbd_odometry',
             name='rtabmap_rgbd_odometry',
@@ -58,6 +78,14 @@ def generate_launch_description():
             name='rtabmap',
             output='screen',
             arguments=['-d'],
+            parameters=parameters,
+            remappings=remappings
+        ),
+        Node(
+            package='rtabmap_viz',
+            executable='rtabmap_viz',
+            name='rtabmapviz',
+            output='screen',
             parameters=parameters,
             remappings=remappings
         ),

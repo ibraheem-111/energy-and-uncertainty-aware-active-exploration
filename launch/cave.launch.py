@@ -3,6 +3,7 @@ from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
     ExecuteProcess,
+    GroupAction,
     RegisterEventHandler,
     TimerAction,
 )
@@ -42,6 +43,7 @@ def generate_launch_description():
     model_pose = LaunchConfiguration('model_pose', default=model_pose_default)
     sys_autostart = LaunchConfiguration('sys_autostart')
     gazebo_startup_delay = LaunchConfiguration('gazebo_startup_delay')
+    no_rtabmap = LaunchConfiguration('no_rtabmap')
 
     # Apply sim time to every ROS node launched after this action.
     use_sim_time_global = SetParameter(name='use_sim_time', value=True)
@@ -52,7 +54,9 @@ def generate_launch_description():
     parameters = [{
         'use_sim_time': True,
         'frame_id': CAMERA_LINK_NAME,
-        'approx_sync': False,
+        'approx_sync': True,
+        'approx_sync_max_interval': 0.05,
+        'topic_queue_size': 10,
         'queue_size': 10,
         'sync_queue_size': 10,
         'odom_sensor_sync': False,
@@ -60,7 +64,9 @@ def generate_launch_description():
         'visual_odometry': True,
         'publish_tf': True,
         'wait_for_transform': 0.2,
-        'wait_imu_to_init': False,
+        'wait_imu_to_init': True,
+        'always_check_imu_tf': True,
+        'qos_imu': 0,
         'subscribe_depth': True,
         'subscribe_rgb': True,
         'subscribe_rgbd': False,
@@ -185,9 +191,9 @@ def generate_launch_description():
             '0.12',
             '0.03',
             '0.242',
+            '-1.57079632679',
             '0',
-            '0',
-            '0',
+            '-1.57079632679',
             'base_link',
             CAMERA_LINK_NAME,
         ],
@@ -292,9 +298,14 @@ def generate_launch_description():
                     actions=[
                         bridge,
                         camera_static_tf,
-                        rtabmap_odom,
-                        rtabmap_slam,
-                        rtabmap_viz,
+                        GroupAction(
+                            condition=UnlessCondition(no_rtabmap),
+                            actions=[
+                                rtabmap_odom,
+                                rtabmap_slam,
+                                rtabmap_viz,
+                            ],
+                        ),
                         rtabmap_to_px4_odom,
                     ],
                 )
@@ -366,6 +377,14 @@ def generate_launch_description():
             description=(
                 'Seconds to let the cave world load before PX4 spawns the '
                 'drone.'
+            ),
+        ),
+        DeclareLaunchArgument(
+            'no_rtabmap',
+            default_value='false',
+            description=(
+                'If true, skip launching the RTAB-Map odometry, slam, and '
+                'viz nodes from this integrated launch.'
             ),
         ),
 

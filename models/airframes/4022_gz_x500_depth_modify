@@ -11,11 +11,11 @@ PX4_SIM_MODEL=${PX4_SIM_MODEL:=x500_depth_modify}
 
 # GNSS-denied cave flight defaults: fuse external vision and allow arming
 # without GPS while keeping the rest of the x500 baseline unchanged.
-param set-default EKF2_GPS_CTRL 0
-param set-default EKF2_EV_CTRL 15
-param set-default EKF2_HGT_REF 3
-param set-default EKF2_MAG_TYPE 5
-param set-default COM_ARM_WO_GPS 1
-param set-default COM_DL_LOSS_T 10
-param set-default NAV_DLL_ACT 0
-param set-default SYS_HAS_MAG 0
+param set EKF2_GPS_CTRL 0
+param set EKF2_EV_CTRL 15
+param set EKF2_HGT_REF 3
+param set EKF2_MAG_TYPE 5
+param set COM_ARM_WO_GPS 1
+param set COM_DL_LOSS_T 10
+param set NAV_DLL_ACT 0
+param set SYS_HAS_MAG 0
