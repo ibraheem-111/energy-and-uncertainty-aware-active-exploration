@@ -1,4 +1,7 @@
+import csv
 import math
+import os
+import time
 from typing import Optional, Tuple
 
 import rclpy
@@ -20,6 +23,7 @@ from rclpy.qos import (
     QoSProfile,
     ReliabilityPolicy,
 )
+from rtabmap_msgs.msg import OdomInfo
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import ColorRGBA
 from visualization_msgs.msg import Marker, MarkerArray
@@ -30,7 +34,7 @@ class ExplorationOffboard(Node):
         super().__init__("exploration_offboard")
 
         self.declare_parameter("heartbeat_rate_hz", 30.0)
-        self.declare_parameter("takeoff_height_m", 1.0)
+        self.declare_parameter("takeoff_height_m", 2.0)
         self.declare_parameter("target_yaw_rad", 0.0)
         self.declare_parameter("auto_engage", False)
         self.declare_parameter("warmup_setpoint_count", 10)
@@ -39,14 +43,19 @@ class ExplorationOffboard(Node):
         self.declare_parameter("hover_lateral_velocity_tolerance_mps", 0.10)
         self.declare_parameter("settle_duration_s", 1.0)
         self.declare_parameter("explore_after_hover", True)
-        self.declare_parameter("entry_distance_m", 3.0)
-        self.declare_parameter("setpoint_speed_mps", 0.25)
-        self.declare_parameter("vertical_setpoint_speed_mps", 0.25)
-        self.declare_parameter("waypoint_reached_tolerance_m", 0.30)
-        self.declare_parameter("frontier_replan_period_s", 2.0)
+        self.declare_parameter("entry_distance_m", 10.0)
+        self.declare_parameter("entry_lookahead_m", 5.0)
+        self.declare_parameter("entry_setpoint_speed_mps", 0.8)
+        self.declare_parameter("setpoint_speed_mps", 0.5)
+        self.declare_parameter("vertical_setpoint_speed_mps", 0.45)
+        self.declare_parameter("waypoint_reached_tolerance_m", 1.0)
+        self.declare_parameter("frontier_replan_period_s", 8.0)
         self.declare_parameter("frontier_goal_min_range_m", 0.8)
-        self.declare_parameter("frontier_goal_max_range_m", 4.0)
+        self.declare_parameter("frontier_goal_max_range_m", 3.0)
         self.declare_parameter("frontier_stride_cells", 2)
+        self.declare_parameter("frontier_cluster_min_cells", 4)
+        self.declare_parameter("frontier_distance_weight", -0.2)
+        self.declare_parameter("frontier_forward_weight", 0.0)
         self.declare_parameter("free_cell_max_value", 20)
         self.declare_parameter("occupied_cell_min_value", 50)
         self.declare_parameter("battery_return_threshold", 0.25)
@@ -59,12 +68,35 @@ class ExplorationOffboard(Node):
         self.declare_parameter("lidar_topic", "/drone/lidar_scan")
         self.declare_parameter("lidar_front_sector_deg", 35.0)
         self.declare_parameter("lidar_side_sector_deg", 95.0)
-        self.declare_parameter("lidar_avoid_distance_m", 1.5)
-        self.declare_parameter("lidar_hard_stop_distance_m", 0.75)
-        self.declare_parameter("lidar_side_clearance_m", 0.65)
-        self.declare_parameter("lidar_local_step_m", 0.55)
-        self.declare_parameter("lidar_sidestep_m", 0.35)
+        self.declare_parameter("lidar_avoid_distance_m", 2.0)
+        self.declare_parameter("lidar_hard_stop_distance_m", 1.0)
+        self.declare_parameter("lidar_side_clearance_m", 0.9)
+        self.declare_parameter("lidar_emergency_stop_distance_m", 0.45)
+        self.declare_parameter("lidar_local_step_m", 0.35)
+        self.declare_parameter("lidar_sidestep_m", 0.25)
+        self.declare_parameter("lidar_centering_gain", 0.35)
+        self.declare_parameter("mppi_enabled", True)
+        self.declare_parameter("mppi_frontier_candidate_limit", 250)
+        self.declare_parameter("mppi_path_step_m", 0.35)
+        self.declare_parameter("mppi_horizon_steps", 14)
+        self.declare_parameter("mppi_heading_samples", 17)
+        self.declare_parameter("mppi_max_heading_offset_deg", 110.0)
+        self.declare_parameter("mppi_robot_radius_m", 0.45)
+        self.declare_parameter("mppi_allow_unknown_path_cells", True)
+        self.declare_parameter("map_class_markers_enabled", True)
+        self.declare_parameter("map_class_marker_stride_cells", 2)
+        self.declare_parameter("frontier_marker_stride_cells", 1)
+        self.declare_parameter("max_map_marker_cells", 6000)
         self.declare_parameter("marker_frame_id", "map")
+        self.declare_parameter("metrics_enabled", True)
+        self.declare_parameter(
+            "metrics_log_dir",
+            os.path.expanduser("~/ros2_ws/exploration_logs"),
+        )
+        self.declare_parameter("experiment_label", "")
+        self.declare_parameter("metrics_period_s", 1.0)
+        self.declare_parameter("experiment_timeout_s", 300.0)
+        self.declare_parameter("odom_info_topic", "/rtabmap/odom_info")
 
         self.heartbeat_rate_hz = float(
             self.get_parameter("heartbeat_rate_hz").value
@@ -101,6 +133,12 @@ class ExplorationOffboard(Node):
         self.entry_distance_m = abs(
             float(self.get_parameter("entry_distance_m").value)
         )
+        self.entry_lookahead_m = abs(
+            float(self.get_parameter("entry_lookahead_m").value)
+        )
+        self.entry_setpoint_speed_mps = abs(
+            float(self.get_parameter("entry_setpoint_speed_mps").value)
+        )
         self.setpoint_speed_mps = abs(
             float(self.get_parameter("setpoint_speed_mps").value)
         )
@@ -122,6 +160,15 @@ class ExplorationOffboard(Node):
         )
         self.frontier_stride_cells = max(
             1, int(self.get_parameter("frontier_stride_cells").value)
+        )
+        self.frontier_cluster_min_cells = max(
+            1, int(self.get_parameter("frontier_cluster_min_cells").value)
+        )
+        self.frontier_distance_weight = float(
+            self.get_parameter("frontier_distance_weight").value
+        )
+        self.frontier_forward_weight = float(
+            self.get_parameter("frontier_forward_weight").value
         )
         self.free_cell_max_value = int(
             self.get_parameter("free_cell_max_value").value
@@ -164,13 +211,71 @@ class ExplorationOffboard(Node):
         self.lidar_side_clearance_m = abs(
             float(self.get_parameter("lidar_side_clearance_m").value)
         )
+        self.lidar_emergency_stop_distance_m = abs(
+            float(self.get_parameter("lidar_emergency_stop_distance_m").value)
+        )
         self.lidar_local_step_m = abs(
             float(self.get_parameter("lidar_local_step_m").value)
         )
         self.lidar_sidestep_m = abs(
             float(self.get_parameter("lidar_sidestep_m").value)
         )
+        self.lidar_centering_gain = abs(
+            float(self.get_parameter("lidar_centering_gain").value)
+        )
+        self.mppi_enabled = bool(self.get_parameter("mppi_enabled").value)
+        self.mppi_frontier_candidate_limit = max(
+            1, int(self.get_parameter("mppi_frontier_candidate_limit").value)
+        )
+        self.mppi_path_step_m = abs(
+            float(self.get_parameter("mppi_path_step_m").value)
+        )
+        self.mppi_horizon_steps = max(
+            2, int(self.get_parameter("mppi_horizon_steps").value)
+        )
+        self.mppi_heading_samples = max(
+            3, int(self.get_parameter("mppi_heading_samples").value)
+        )
+        self.mppi_max_heading_offset_rad = math.radians(
+            abs(float(self.get_parameter("mppi_max_heading_offset_deg").value))
+        )
+        self.mppi_robot_radius_m = abs(
+            float(self.get_parameter("mppi_robot_radius_m").value)
+        )
+        self.mppi_allow_unknown_path_cells = bool(
+            self.get_parameter("mppi_allow_unknown_path_cells").value
+        )
+        self.map_class_markers_enabled = bool(
+            self.get_parameter("map_class_markers_enabled").value
+        )
+        self.map_class_marker_stride_cells = max(
+            1, int(self.get_parameter("map_class_marker_stride_cells").value)
+        )
+        self.frontier_marker_stride_cells = max(
+            1, int(self.get_parameter("frontier_marker_stride_cells").value)
+        )
+        self.max_map_marker_cells = max(
+            1, int(self.get_parameter("max_map_marker_cells").value)
+        )
         self.marker_frame_id = str(self.get_parameter("marker_frame_id").value)
+        self.metrics_enabled = bool(self.get_parameter("metrics_enabled").value)
+        self.metrics_log_dir = os.path.expanduser(
+            str(self.get_parameter("metrics_log_dir").value)
+        )
+        self.experiment_label = str(
+            self.get_parameter("experiment_label").value
+        ).strip()
+        if not self.experiment_label:
+            self.experiment_label = "mppi" if self.mppi_enabled else "frontier"
+        self.metrics_period_us = int(
+            max(float(self.get_parameter("metrics_period_s").value), 0.1)
+            * 1_000_000
+        )
+        self.experiment_timeout_us = int(
+            max(float(self.get_parameter("experiment_timeout_s").value), 0.0)
+            * 1_000_000
+        )
+        self.odom_info_topic = str(self.get_parameter("odom_info_topic").value)
 
         self.vehicle_status: Optional[VehicleStatus] = None
         self.local_position: Optional[VehicleLocalPosition] = None
@@ -180,6 +285,12 @@ class ExplorationOffboard(Node):
         self.lidar_left_min = math.inf
         self.lidar_right_min = math.inf
         self.lidar_scan_stamp_us = 0
+        self.latest_features_detected = 0
+        self.latest_feature_matches = 0
+        self.latest_feature_inliers = 0
+        self.max_features_detected = 0
+        self.feature_sample_count = 0
+        self.feature_sample_sum = 0
 
         self.offboard_setpoint_counter = 0
         self.takeoff_reference_x: Optional[float] = None
@@ -203,6 +314,8 @@ class ExplorationOffboard(Node):
         self.last_frontier_plan_us = 0
         self.scripted_waypoints = []
         self.scripted_waypoint_index = 0
+        self.active_mppi_path = []
+        self.active_mppi_path_index = 0
 
         self.takeoff_altitude_reached = False
         self.entry_completed = False
@@ -216,6 +329,15 @@ class ExplorationOffboard(Node):
         self.settle_xy_reset_counter: Optional[int] = None
         self.last_takeoff_debug_us = 0
         self.last_obstacle_log_us = 0
+        self.metrics_start_us = self.now_us()
+        self.last_metrics_us = 0
+        self.metrics_path = ""
+        self.metrics_file = None
+        self.metrics_writer = None
+        self.travel_distance_m = 0.0
+        self.last_metric_position: Optional[Tuple[float, float, float]] = None
+        self.experiment_timeout_reported = False
+        self.open_metrics_log()
 
         px4_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -254,6 +376,12 @@ class ExplorationOffboard(Node):
             self.lidar_callback,
             10,
         )
+        self.odom_info_sub = self.create_subscription(
+            OdomInfo,
+            self.odom_info_topic,
+            self.odom_info_callback,
+            10,
+        )
 
         self.offboard_control_mode_pub = self.create_publisher(
             OffboardControlMode,
@@ -286,6 +414,81 @@ class ExplorationOffboard(Node):
             "frontier-target, and battery-return phases"
         )
 
+    def open_metrics_log(self):
+        if not self.metrics_enabled:
+            return
+
+        os.makedirs(self.metrics_log_dir, exist_ok=True)
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        planner = "mppi" if self.mppi_enabled else "frontier"
+        safe_label = "".join(
+            char if char.isalnum() or char in ("-", "_") else "_"
+            for char in self.experiment_label
+        )
+        self.metrics_path = os.path.join(
+            self.metrics_log_dir,
+            f"{timestamp}_{safe_label}_{planner}.csv",
+        )
+        self.metrics_file = open(self.metrics_path, "w", newline="")
+        self.metrics_writer = csv.DictWriter(
+            self.metrics_file,
+            fieldnames=[
+                "timestamp_us",
+                "elapsed_s",
+                "experiment_label",
+                "planner",
+                "mppi_enabled",
+                "flight_phase",
+                "nav_state",
+                "arming_state",
+                "preflight_pass",
+                "battery_remaining",
+                "x_m",
+                "y_m",
+                "z_m",
+                "vx_mps",
+                "vy_mps",
+                "vz_mps",
+                "travel_distance_m",
+                "known_cells",
+                "free_cells",
+                "occupied_cells",
+                "unknown_cells",
+                "frontier_cells",
+                "frontier_clusters",
+                "largest_frontier_cluster_cells",
+                "known_area_m2",
+                "free_area_m2",
+                "occupied_area_m2",
+                "unknown_area_m2",
+                "frontier_area_m2",
+                "map_resolution_m",
+                "map_width_cells",
+                "map_height_cells",
+                "active_mppi_path_points",
+                "frontier_target_x_m",
+                "frontier_target_y_m",
+                "entry_completed",
+                "return_started",
+                "features_detected",
+                "feature_matches",
+                "feature_inliers",
+                "max_features_detected",
+                "mean_features_detected",
+                "experiment_timed_out",
+            ],
+        )
+        self.metrics_writer.writeheader()
+        self.metrics_file.flush()
+        self.get_logger().info(f"Exploration metrics CSV: {self.metrics_path}")
+
+    def destroy_node(self):
+        if self.metrics_file is not None:
+            self.metrics_file.flush()
+            self.metrics_file.close()
+            self.metrics_file = None
+        super().destroy_node()
+
     def vehicle_status_callback(self, msg: VehicleStatus):
         self.vehicle_status = msg
 
@@ -297,6 +500,17 @@ class ExplorationOffboard(Node):
 
     def map_callback(self, msg: OccupancyGrid):
         self.latest_map = msg
+
+    def odom_info_callback(self, msg: OdomInfo):
+        self.latest_features_detected = int(msg.features)
+        self.latest_feature_matches = int(msg.matches)
+        self.latest_feature_inliers = int(msg.inliers)
+        self.max_features_detected = max(
+            self.max_features_detected,
+            self.latest_features_detected,
+        )
+        self.feature_sample_count += 1
+        self.feature_sample_sum += self.latest_features_detected
 
     def lidar_callback(self, msg: LaserScan):
         front_min = math.inf
@@ -340,6 +554,10 @@ class ExplorationOffboard(Node):
         timestamp_us = self.now_us()
         self.publish_offboard_heartbeat(timestamp_us)
         self.publish_visualization_markers(timestamp_us)
+        self.record_exploration_metrics(timestamp_us)
+        if self.experiment_timed_out(timestamp_us):
+            self.finish_experiment_timeout(timestamp_us)
+            return
 
         if not self.has_valid_takeoff_state():
             self.set_flight_phase("WAIT_FOR_VALID_STATE")
@@ -434,8 +652,8 @@ class ExplorationOffboard(Node):
             self.set_flight_phase("POST_TAKEOFF_SETTLE")
             self.publish_hold_setpoint(
                 timestamp_us,
-                self.takeoff_reference_x,
-                self.takeoff_reference_y,
+                self.local_position.x,
+                self.local_position.y,
                 self.target_z,
                 self.reference_yaw,
                 ramp=True,
@@ -472,6 +690,187 @@ class ExplorationOffboard(Node):
 
     def now_us(self) -> int:
         return int(self.get_clock().now().nanoseconds / 1000)
+
+    def experiment_timed_out(self, timestamp_us: int) -> bool:
+        if self.experiment_timeout_us <= 0:
+            return False
+        return timestamp_us - self.metrics_start_us >= self.experiment_timeout_us
+
+    def finish_experiment_timeout(self, timestamp_us: int):
+        if self.experiment_timeout_reported:
+            return
+
+        self.experiment_timeout_reported = True
+        self.set_flight_phase("EXPERIMENT_TIMEOUT")
+        self.record_exploration_metrics(timestamp_us, force=True)
+        self.get_logger().info(
+            "Experiment timeout reached; final metrics written to "
+            f"{self.metrics_path}"
+        )
+        rclpy.shutdown()
+
+    def record_exploration_metrics(self, timestamp_us: int, force: bool = False):
+        if (
+            not self.metrics_enabled
+            or self.metrics_writer is None
+            or (
+                not force
+                and timestamp_us - self.last_metrics_us < self.metrics_period_us
+            )
+        ):
+            return
+
+        self.last_metrics_us = timestamp_us
+        self.update_travel_distance()
+        map_metrics = self.compute_map_metrics()
+        mean_features = (
+            self.feature_sample_sum / self.feature_sample_count
+            if self.feature_sample_count > 0
+            else 0.0
+        )
+
+        battery = ""
+        if self.battery_status is not None:
+            battery = f"{float(self.battery_status.remaining):.4f}"
+
+        row = {
+            "timestamp_us": timestamp_us,
+            "elapsed_s": f"{(timestamp_us - self.metrics_start_us) / 1_000_000.0:.3f}",
+            "experiment_label": self.experiment_label,
+            "planner": "mppi" if self.mppi_enabled else "frontier",
+            "mppi_enabled": int(self.mppi_enabled),
+            "flight_phase": self.flight_phase,
+            "nav_state": "" if self.vehicle_status is None else self.vehicle_status.nav_state,
+            "arming_state": (
+                "" if self.vehicle_status is None else self.vehicle_status.arming_state
+            ),
+            "preflight_pass": (
+                "" if self.vehicle_status is None
+                else int(self.vehicle_status.pre_flight_checks_pass)
+            ),
+            "battery_remaining": battery,
+            "x_m": self.format_metric_float(self.local_position.x if self.local_position else None),
+            "y_m": self.format_metric_float(self.local_position.y if self.local_position else None),
+            "z_m": self.format_metric_float(self.local_position.z if self.local_position else None),
+            "vx_mps": self.format_metric_float(self.local_position.vx if self.local_position else None),
+            "vy_mps": self.format_metric_float(self.local_position.vy if self.local_position else None),
+            "vz_mps": self.format_metric_float(self.local_position.vz if self.local_position else None),
+            "travel_distance_m": f"{self.travel_distance_m:.3f}",
+            "active_mppi_path_points": len(self.active_mppi_path),
+            "frontier_target_x_m": self.format_metric_float(self.frontier_target_x),
+            "frontier_target_y_m": self.format_metric_float(self.frontier_target_y),
+            "entry_completed": int(self.entry_completed),
+            "return_started": int(self.return_started),
+            "features_detected": self.latest_features_detected,
+            "feature_matches": self.latest_feature_matches,
+            "feature_inliers": self.latest_feature_inliers,
+            "max_features_detected": self.max_features_detected,
+            "mean_features_detected": f"{mean_features:.2f}",
+            "experiment_timed_out": int(self.experiment_timeout_reported),
+        }
+        row.update(map_metrics)
+        self.metrics_writer.writerow(row)
+        if self.metrics_file is not None:
+            self.metrics_file.flush()
+
+    def update_travel_distance(self):
+        if self.local_position is None:
+            return
+
+        position = (
+            float(self.local_position.x),
+            float(self.local_position.y),
+            float(self.local_position.z),
+        )
+        if self.last_metric_position is not None:
+            dx = position[0] - self.last_metric_position[0]
+            dy = position[1] - self.last_metric_position[1]
+            dz = position[2] - self.last_metric_position[2]
+            step = math.sqrt(dx * dx + dy * dy + dz * dz)
+            if step < 5.0:
+                self.travel_distance_m += step
+        self.last_metric_position = position
+
+    def compute_map_metrics(self):
+        empty = {
+            "known_cells": 0,
+            "free_cells": 0,
+            "occupied_cells": 0,
+            "unknown_cells": 0,
+            "frontier_cells": 0,
+            "frontier_clusters": 0,
+            "largest_frontier_cluster_cells": 0,
+            "known_area_m2": "0.000",
+            "free_area_m2": "0.000",
+            "occupied_area_m2": "0.000",
+            "unknown_area_m2": "0.000",
+            "frontier_area_m2": "0.000",
+            "map_resolution_m": "",
+            "map_width_cells": 0,
+            "map_height_cells": 0,
+        }
+        grid = self.latest_map
+        if grid is None:
+            return empty
+
+        width = int(grid.info.width)
+        height = int(grid.info.height)
+        resolution = float(grid.info.resolution)
+        cell_area = resolution * resolution
+        free_cells = 0
+        occupied_cells = 0
+        unknown_cells = 0
+        other_known_cells = 0
+        frontier_cells = 0
+        frontier_seen = set()
+
+        for y in range(height):
+            row_offset = y * width
+            for x in range(width):
+                value = int(grid.data[row_offset + x])
+                if value < 0:
+                    unknown_cells += 1
+                    if (
+                        0 < x < width - 1
+                        and 0 < y < height - 1
+                        and self.find_free_neighbor(grid, x, y) is not None
+                    ):
+                        frontier_cells += 1
+                        if self.cell_on_stride(x, y, self.frontier_stride_cells):
+                            frontier_seen.add((x, y))
+                elif value >= self.occupied_cell_min_value:
+                    occupied_cells += 1
+                elif value <= self.free_cell_max_value:
+                    free_cells += 1
+                else:
+                    other_known_cells += 1
+
+        clusters = self.cluster_frontier_cell_set(frontier_seen)
+        largest_cluster = max((len(cluster) for cluster in clusters), default=0)
+        known_cells = free_cells + occupied_cells + other_known_cells
+        return {
+            "known_cells": known_cells,
+            "free_cells": free_cells,
+            "occupied_cells": occupied_cells,
+            "unknown_cells": unknown_cells,
+            "frontier_cells": frontier_cells,
+            "frontier_clusters": len(clusters),
+            "largest_frontier_cluster_cells": largest_cluster,
+            "known_area_m2": f"{known_cells * cell_area:.3f}",
+            "free_area_m2": f"{free_cells * cell_area:.3f}",
+            "occupied_area_m2": f"{occupied_cells * cell_area:.3f}",
+            "unknown_area_m2": f"{unknown_cells * cell_area:.3f}",
+            "frontier_area_m2": f"{frontier_cells * cell_area:.3f}",
+            "map_resolution_m": f"{resolution:.4f}",
+            "map_width_cells": width,
+            "map_height_cells": height,
+        }
+
+    @staticmethod
+    def format_metric_float(value) -> str:
+        if value is None:
+            return ""
+        return f"{float(value):.4f}"
 
     def has_valid_takeoff_state(self) -> bool:
         if self.vehicle_status is None or self.local_position is None:
@@ -568,16 +967,35 @@ class ExplorationOffboard(Node):
                 f"z={self.hover_reference_z:.2f}"
             )
 
+        yaw = float(self.hover_reference_yaw)
+        forward_x = math.cos(yaw)
+        forward_y = math.sin(yaw)
+        progress_m = (
+            (float(self.local_position.x) - float(self.hover_reference_x)) * forward_x
+            + (float(self.local_position.y) - float(self.hover_reference_y)) * forward_y
+        )
+        lookahead_progress_m = min(
+            max(progress_m, 0.0) + self.entry_lookahead_m,
+            self.entry_distance_m,
+        )
+        entry_setpoint_x = (
+            float(self.hover_reference_x) + lookahead_progress_m * forward_x
+        )
+        entry_setpoint_y = (
+            float(self.hover_reference_y) + lookahead_progress_m * forward_y
+        )
+
         self.set_flight_phase("ENTER_CAVE")
         self.publish_hold_setpoint(
             timestamp_us,
-            self.entry_target_x,
-            self.entry_target_y,
+            entry_setpoint_x,
+            entry_setpoint_y,
             self.hover_reference_z,
             self.hover_reference_yaw,
             ramp=True,
+            horizontal_speed_mps=self.entry_setpoint_speed_mps,
         )
-        if self.reached_xy_target(self.entry_target_x, self.entry_target_y):
+        if progress_m >= self.entry_distance_m - self.waypoint_reached_tolerance_m:
             self.entry_completed = True
             self.frontier_target_x = None
             self.frontier_target_y = None
@@ -585,22 +1003,19 @@ class ExplorationOffboard(Node):
 
     def run_frontier_exploration(self, timestamp_us: int):
         if self.latest_map is None:
-            if self.scripted_fallback_enabled:
-                self.run_scripted_exploration(timestamp_us, "SCRIPTED_EXPLORE_NO_MAP")
-            else:
-                self.set_flight_phase("WAITING_FOR_FRONTIER_MAP")
-                self.publish_hold_setpoint(
-                    timestamp_us,
-                    self.commanded_x,
-                    self.commanded_y,
-                    self.hover_reference_z,
-                    self.hover_reference_yaw,
-                    ramp=True,
-                )
-                self.log_wait_condition(
-                    timestamp_us,
-                    f"Waiting for occupancy grid on {self.map_topic}",
-                )
+            self.set_flight_phase("WAITING_FOR_FRONTIER_MAP")
+            self.publish_hold_setpoint(
+                timestamp_us,
+                self.commanded_x,
+                self.commanded_y,
+                self.hover_reference_z,
+                self.hover_reference_yaw,
+                ramp=True,
+            )
+            self.log_wait_condition(
+                timestamp_us,
+                f"Waiting for occupancy grid on {self.map_topic}",
+            )
             return
 
         should_replan = (
@@ -618,22 +1033,16 @@ class ExplorationOffboard(Node):
             frontier = self.find_frontier_goal()
             self.last_frontier_plan_us = timestamp_us
             if frontier is None:
-                if self.scripted_fallback_enabled:
-                    self.run_scripted_exploration(
-                        timestamp_us,
-                        "SCRIPTED_EXPLORE_NO_FRONTIER",
-                    )
-                else:
-                    self.set_flight_phase("NO_FRONTIER_HOVER")
-                    self.publish_hold_setpoint(
-                        timestamp_us,
-                        self.commanded_x,
-                        self.commanded_y,
-                        self.hover_reference_z,
-                        self.hover_reference_yaw,
-                        ramp=True,
-                    )
-                    self.log_wait_condition(timestamp_us, "No reachable frontier found")
+                self.set_flight_phase("NO_FRONTIER_HOVER")
+                self.publish_hold_setpoint(
+                    timestamp_us,
+                    self.commanded_x,
+                    self.commanded_y,
+                    self.hover_reference_z,
+                    self.hover_reference_yaw,
+                    ramp=True,
+                )
+                self.log_wait_condition(timestamp_us, "No frontier target found")
                 return
 
             self.frontier_target_x, self.frontier_target_y = frontier
@@ -643,11 +1052,15 @@ class ExplorationOffboard(Node):
                 f"y={self.frontier_target_y:.2f}"
             )
 
+        target_x, target_y = self.current_navigation_target() or (
+            self.frontier_target_x,
+            self.frontier_target_y,
+        )
         self.set_flight_phase("FRONTIER_EXPLORE")
         self.publish_hold_setpoint(
             timestamp_us,
-            self.frontier_target_x,
-            self.frontier_target_y,
+            target_x,
+            target_y,
             self.hover_reference_z,
             self.hover_reference_yaw,
             ramp=True,
@@ -663,6 +1076,7 @@ class ExplorationOffboard(Node):
             )
 
         target_x, target_y = self.scripted_waypoints[self.scripted_waypoint_index]
+
         if self.reached_xy_target(target_x, target_y):
             if self.scripted_waypoint_index < len(self.scripted_waypoints) - 1:
                 self.scripted_waypoint_index += 1
@@ -761,8 +1175,58 @@ class ExplorationOffboard(Node):
         forward_map_x = math.sin(yaw)
         forward_map_y = math.cos(yaw)
 
-        best_score = -math.inf
-        best_goal_map: Optional[Tuple[float, float]] = None
+        if not self.mppi_enabled:
+            return self.find_baseline_frontier_goal(
+                grid,
+                current_map_x,
+                current_map_y,
+                forward_map_x,
+                forward_map_y,
+            )
+
+        clusters = self.find_frontier_clusters(grid)
+        for cluster in clusters:
+            candidates = self.frontier_cluster_candidates(
+                grid,
+                cluster,
+                current_map_x,
+                current_map_y,
+                forward_map_x,
+                forward_map_y,
+            )
+            best_goal_map = self.select_reachable_frontier(
+                current_map_x,
+                current_map_y,
+                candidates,
+            )
+            if best_goal_map is None:
+                continue
+
+            self.get_logger().info(
+                "Selected frontier cluster: "
+                f"cells={len(cluster)}, candidates={len(candidates)}"
+            )
+
+            # Convert map ENU x/y back to PX4 local NED x/y.
+            goal_ned_x = best_goal_map[1]
+            goal_ned_y = best_goal_map[0]
+            return goal_ned_x, goal_ned_y
+
+        self.active_mppi_path = []
+        self.active_mppi_path_index = 0
+        return None
+
+    def find_baseline_frontier_goal(
+        self,
+        grid: OccupancyGrid,
+        current_map_x: float,
+        current_map_y: float,
+        forward_map_x: float,
+        forward_map_y: float,
+    ) -> Optional[Tuple[float, float]]:
+        width = int(grid.info.width)
+        height = int(grid.info.height)
+        candidates = []
 
         for y in range(1, height - 1, self.frontier_stride_cells):
             row_offset = y * width
@@ -788,22 +1252,308 @@ class ExplorationOffboard(Node):
                     or distance > self.frontier_goal_max_range_m
                 ):
                     continue
-                if self.near_occupied_cell(grid, free_neighbor[0], free_neighbor[1]):
-                    continue
 
                 forward_projection = dx * forward_map_x + dy * forward_map_y
                 score = distance + 1.5 * forward_projection
-                if score > best_score:
-                    best_score = score
-                    best_goal_map = (goal_map_x, goal_map_y)
+                candidates.append((score, goal_map_x, goal_map_y))
 
-        if best_goal_map is None:
+        if not candidates:
+            self.active_mppi_path = []
+            self.active_mppi_path_index = 0
             return None
+
+        candidates.sort(reverse=True)
+        best_goal_map = candidates[0][1], candidates[0][2]
+        self.active_mppi_path = []
+        self.active_mppi_path_index = 0
 
         # Convert map ENU x/y back to PX4 local NED x/y.
         goal_ned_x = best_goal_map[1]
         goal_ned_y = best_goal_map[0]
         return goal_ned_x, goal_ned_y
+
+    def find_frontier_clusters(self, grid: OccupancyGrid):
+        width = int(grid.info.width)
+        height = int(grid.info.height)
+        frontier_cells = set()
+
+        for y in range(1, height - 1, self.frontier_stride_cells):
+            row_offset = y * width
+            for x in range(1, width - 1, self.frontier_stride_cells):
+                if grid.data[row_offset + x] != -1:
+                    continue
+                if self.find_free_neighbor(grid, x, y) is not None:
+                    frontier_cells.add((x, y))
+
+        return self.cluster_frontier_cell_set(frontier_cells)
+
+    def cluster_frontier_cell_set(self, frontier_cells):
+        frontier_cells = set(frontier_cells)
+        clusters = []
+        while frontier_cells:
+            seed = frontier_cells.pop()
+            cluster = [seed]
+            stack = [seed]
+            while stack:
+                cell_x, cell_y = stack.pop()
+                for dy in (
+                    -self.frontier_stride_cells,
+                    0,
+                    self.frontier_stride_cells,
+                ):
+                    for dx in (
+                        -self.frontier_stride_cells,
+                        0,
+                        self.frontier_stride_cells,
+                    ):
+                        if dx == 0 and dy == 0:
+                            continue
+                        neighbor = (cell_x + dx, cell_y + dy)
+                        if neighbor not in frontier_cells:
+                            continue
+                        frontier_cells.remove(neighbor)
+                        cluster.append(neighbor)
+                        stack.append(neighbor)
+
+            if len(cluster) >= self.frontier_cluster_min_cells:
+                clusters.append(cluster)
+
+        clusters.sort(key=len, reverse=True)
+        return clusters
+
+    def frontier_cluster_candidates(
+        self,
+        grid: OccupancyGrid,
+        cluster,
+        current_map_x: float,
+        current_map_y: float,
+        forward_map_x: float,
+        forward_map_y: float,
+    ):
+        candidates = []
+        for cell_x, cell_y in cluster:
+            free_neighbor = self.find_free_neighbor(grid, cell_x, cell_y)
+            if free_neighbor is None:
+                continue
+
+            goal_map_x, goal_map_y = self.grid_to_map_xy(
+                grid,
+                free_neighbor[0],
+                free_neighbor[1],
+            )
+            dx = goal_map_x - current_map_x
+            dy = goal_map_y - current_map_y
+            distance = math.hypot(dx, dy)
+            if (
+                distance < self.frontier_goal_min_range_m
+                or distance > self.frontier_goal_max_range_m
+            ):
+                continue
+
+            forward_projection = dx * forward_map_x + dy * forward_map_y
+            score = (
+                self.frontier_distance_weight * distance
+                + self.frontier_forward_weight * forward_projection
+            )
+            candidates.append((score, goal_map_x, goal_map_y))
+
+        return candidates
+
+    def select_reachable_frontier(
+        self,
+        start_map_x: float,
+        start_map_y: float,
+        candidates,
+    ) -> Optional[Tuple[float, float]]:
+        if not candidates:
+            return None
+
+        candidates = sorted(candidates, reverse=True)[
+            : self.mppi_frontier_candidate_limit
+        ]
+        if not self.mppi_enabled:
+            self.active_mppi_path = []
+            self.active_mppi_path_index = 0
+            return candidates[0][1], candidates[0][2]
+
+        best_score = -math.inf
+        best_goal = None
+        best_path = []
+        for frontier_score, goal_map_x, goal_map_y in candidates:
+            result = self.plan_mppi_path_to_map_goal(
+                start_map_x,
+                start_map_y,
+                goal_map_x,
+                goal_map_y,
+            )
+            if result is None:
+                continue
+            path_map, path_score = result
+            score = frontier_score + path_score
+            if score > best_score:
+                best_score = score
+                best_goal = (goal_map_x, goal_map_y)
+                best_path = path_map
+
+        if best_goal is None:
+            self.active_mppi_path = []
+            self.active_mppi_path_index = 0
+            return None
+
+        # Store the path in PX4 NED x/y because the offboard setpoint is NED.
+        self.active_mppi_path = [(map_y, map_x) for map_x, map_y in best_path]
+        self.active_mppi_path_index = 0
+        return best_goal
+
+    def plan_mppi_path_to_map_goal(
+        self,
+        start_x: float,
+        start_y: float,
+        goal_x: float,
+        goal_y: float,
+    ):
+        direct_angle = math.atan2(goal_y - start_y, goal_x - start_x)
+        best_score = -math.inf
+        best_path = None
+
+        sample_count = max(3, self.mppi_heading_samples)
+        for sample in range(sample_count):
+            fraction = sample / float(sample_count - 1)
+            offset = (fraction * 2.0 - 1.0) * self.mppi_max_heading_offset_rad
+            x = start_x
+            y = start_y
+            path = []
+            total_clearance = 0.0
+            collision = False
+
+            for step in range(self.mppi_horizon_steps):
+                goal_angle = math.atan2(goal_y - y, goal_x - x)
+                decay = 1.0 - (step / max(float(self.mppi_horizon_steps - 1), 1.0))
+                heading = goal_angle + offset * decay
+                x += self.mppi_path_step_m * math.cos(heading)
+                y += self.mppi_path_step_m * math.sin(heading)
+                if not self.map_xy_is_safe(x, y):
+                    collision = True
+                    break
+                total_clearance += self.map_xy_clearance_score(x, y)
+                path.append((x, y))
+                if math.hypot(goal_x - x, goal_y - y) <= self.waypoint_reached_tolerance_m:
+                    break
+
+            if collision or not path:
+                continue
+
+            final_distance = math.hypot(goal_x - path[-1][0], goal_y - path[-1][1])
+            progress = math.hypot(path[-1][0] - start_x, path[-1][1] - start_y)
+            score = (
+                -2.5 * final_distance
+                + 0.8 * progress
+                + 0.08 * total_clearance
+                - 0.15 * abs(offset)
+            )
+            if score > best_score:
+                best_score = score
+                best_path = path
+
+        if best_path is None:
+            return None
+        return best_path, best_score
+
+    def map_xy_is_safe(self, map_x: float, map_y: float) -> bool:
+        grid = self.latest_map
+        if grid is None:
+            return True
+
+        cell = self.map_xy_to_grid(grid, map_x, map_y)
+        if cell is None:
+            return False
+
+        resolution = float(grid.info.resolution)
+        radius_cells = max(1, int(math.ceil(self.mppi_robot_radius_m / resolution)))
+        width = int(grid.info.width)
+        height = int(grid.info.height)
+        cell_x, cell_y = cell
+        for dy in range(-radius_cells, radius_cells + 1):
+            for dx in range(-radius_cells, radius_cells + 1):
+                nx = cell_x + dx
+                ny = cell_y + dy
+                if nx < 0 or ny < 0 or nx >= width or ny >= height:
+                    return False
+                if math.hypot(dx, dy) > radius_cells:
+                    continue
+                value = int(grid.data[ny * width + nx])
+                if value < 0 and not self.mppi_allow_unknown_path_cells:
+                    return False
+                if value >= self.occupied_cell_min_value:
+                    return False
+        return True
+
+    def map_xy_clearance_score(self, map_x: float, map_y: float) -> float:
+        grid = self.latest_map
+        if grid is None:
+            return 0.0
+
+        cell = self.map_xy_to_grid(grid, map_x, map_y)
+        if cell is None:
+            return -10.0
+
+        resolution = float(grid.info.resolution)
+        width = int(grid.info.width)
+        height = int(grid.info.height)
+        cell_x, cell_y = cell
+        search_radius = max(2, int(math.ceil(1.5 * self.mppi_robot_radius_m / resolution)))
+        nearest = search_radius
+        for dy in range(-search_radius, search_radius + 1):
+            for dx in range(-search_radius, search_radius + 1):
+                nx = cell_x + dx
+                ny = cell_y + dy
+                if nx < 0 or ny < 0 or nx >= width or ny >= height:
+                    nearest = min(nearest, int(math.hypot(dx, dy)))
+                    continue
+                value = int(grid.data[ny * width + nx])
+                if value >= self.occupied_cell_min_value:
+                    nearest = min(nearest, int(math.hypot(dx, dy)))
+        return float(nearest) * resolution
+
+    def map_xy_to_grid(
+        self,
+        grid: OccupancyGrid,
+        map_x: float,
+        map_y: float,
+    ) -> Optional[Tuple[int, int]]:
+        origin = grid.info.origin.position
+        resolution = float(grid.info.resolution)
+        if resolution <= 0.0:
+            return None
+
+        cell_x = int(math.floor((map_x - float(origin.x)) / resolution))
+        cell_y = int(math.floor((map_y - float(origin.y)) / resolution))
+        if (
+            cell_x < 0
+            or cell_y < 0
+            or cell_x >= int(grid.info.width)
+            or cell_y >= int(grid.info.height)
+        ):
+            return None
+        return cell_x, cell_y
+
+    def current_navigation_target(self) -> Optional[Tuple[float, float]]:
+        while (
+            self.active_mppi_path
+            and self.active_mppi_path_index < len(self.active_mppi_path)
+            and self.reached_xy_target(
+                self.active_mppi_path[self.active_mppi_path_index][0],
+                self.active_mppi_path[self.active_mppi_path_index][1],
+            )
+        ):
+            self.active_mppi_path_index += 1
+
+        if self.active_mppi_path_index < len(self.active_mppi_path):
+            return self.active_mppi_path[self.active_mppi_path_index]
+
+        if self.frontier_target_x is not None and self.frontier_target_y is not None:
+            return self.frontier_target_x, self.frontier_target_y
+        return None
 
     def find_free_neighbor(
         self,
@@ -1021,6 +1771,11 @@ class ExplorationOffboard(Node):
         markers.markers.append(delete_all)
 
         marker_id = 1
+        if self.map_class_markers_enabled and self.latest_map is not None:
+            for marker in self.make_map_class_markers(marker_id, stamp):
+                markers.markers.append(marker)
+                marker_id += 1
+
         if (
             self.takeoff_reference_x is not None
             and self.takeoff_reference_y is not None
@@ -1113,6 +1868,19 @@ class ExplorationOffboard(Node):
             )
             marker_id += 1
 
+        if self.active_mppi_path:
+            markers.markers.append(
+                self.make_line_marker(
+                    marker_id,
+                    "mppi_path",
+                    self.active_mppi_path,
+                    0.045,
+                    self.color(1.0, 0.55, 0.1, 0.95),
+                    stamp,
+                )
+            )
+            marker_id += 1
+
         if self.lidar_obstacle_avoidance_enabled and self.local_position is not None:
             markers.markers.append(
                 self.make_lidar_status_marker(marker_id, stamp)
@@ -1130,6 +1898,104 @@ class ExplorationOffboard(Node):
         if self.scripted_waypoints:
             return self.scripted_waypoints[self.scripted_waypoint_index]
         return None
+
+    def make_map_class_markers(self, start_id: int, stamp):
+        grid = self.latest_map
+        if grid is None:
+            return []
+
+        free_points = []
+        occupied_points = []
+        unknown_points = []
+        frontier_points = []
+        width = int(grid.info.width)
+        height = int(grid.info.height)
+
+        for y in range(1, height - 1):
+            row_offset = y * width
+            for x in range(1, width - 1):
+                value = int(grid.data[row_offset + x])
+                is_frontier = value < 0 and self.find_free_neighbor(grid, x, y) is not None
+                if is_frontier and self.cell_on_stride(x, y, self.frontier_marker_stride_cells):
+                    frontier_points.append(self.map_cell_marker_point(grid, x, y, 0.055))
+                    if len(frontier_points) >= self.max_map_marker_cells:
+                        continue
+
+                if not self.cell_on_stride(x, y, self.map_class_marker_stride_cells):
+                    continue
+
+                point = self.map_cell_marker_point(grid, x, y, 0.015)
+                if value < 0:
+                    unknown_points.append(point)
+                elif value >= self.occupied_cell_min_value:
+                    occupied_points.append(point)
+                elif value <= self.free_cell_max_value:
+                    free_points.append(point)
+
+                if (
+                    len(free_points)
+                    + len(occupied_points)
+                    + len(unknown_points)
+                    >= self.max_map_marker_cells
+                ):
+                    break
+            if (
+                len(free_points)
+                + len(occupied_points)
+                + len(unknown_points)
+                >= self.max_map_marker_cells
+            ):
+                break
+
+        resolution = float(grid.info.resolution)
+        return [
+            self.make_cube_list_marker(
+                start_id,
+                "map_free_cells",
+                free_points,
+                resolution,
+                self.color(0.92, 0.92, 0.92, 0.22),
+                stamp,
+            ),
+            self.make_cube_list_marker(
+                start_id + 1,
+                "map_occupied_cells",
+                occupied_points,
+                resolution,
+                self.color(0.0, 0.0, 0.0, 0.9),
+                stamp,
+            ),
+            self.make_cube_list_marker(
+                start_id + 2,
+                "map_unknown_cells",
+                unknown_points,
+                resolution,
+                self.color(0.35, 0.35, 0.35, 0.25),
+                stamp,
+            ),
+            self.make_cube_list_marker(
+                start_id + 3,
+                "frontier_cells",
+                frontier_points,
+                resolution * 1.3,
+                self.color(0.0, 0.85, 1.0, 0.95),
+                stamp,
+            ),
+        ]
+
+    @staticmethod
+    def cell_on_stride(cell_x: int, cell_y: int, stride: int) -> bool:
+        return cell_x % stride == 0 and cell_y % stride == 0
+
+    def map_cell_marker_point(
+        self,
+        grid: OccupancyGrid,
+        cell_x: int,
+        cell_y: int,
+        z: float,
+    ) -> Point:
+        map_x, map_y = self.grid_to_map_xy(grid, cell_x, cell_y)
+        return self.make_point(map_x, map_y, z)
 
     def make_sphere_marker(
         self,
@@ -1194,6 +2060,24 @@ class ExplorationOffboard(Node):
         ]
         return marker
 
+    def make_cube_list_marker(
+        self,
+        marker_id: int,
+        namespace: str,
+        points,
+        scale: float,
+        color: ColorRGBA,
+        stamp,
+    ) -> Marker:
+        marker = self.base_marker(marker_id, namespace, stamp)
+        marker.type = Marker.CUBE_LIST
+        marker.scale.x = scale
+        marker.scale.y = scale
+        marker.scale.z = 0.02
+        marker.color = color
+        marker.points = list(points)
+        return marker
+
     def make_lidar_status_marker(self, marker_id: int, stamp) -> Marker:
         marker = self.base_marker(marker_id, "lidar_status", stamp)
         marker.type = Marker.TEXT_VIEW_FACING
@@ -1203,9 +2087,9 @@ class ExplorationOffboard(Node):
         )
         marker.pose.position.x = rviz_x
         marker.pose.position.y = rviz_y
-        marker.pose.position.z = 0.7
+        marker.pose.position.z = 0.35
         marker.pose.orientation.w = 1.0
-        marker.scale.z = 0.25
+        marker.scale.z = 0.13
         obstacle = (
             self.lidar_front_min < self.lidar_avoid_distance_m
             or self.lidar_left_min < self.lidar_side_clearance_m
@@ -1218,7 +2102,7 @@ class ExplorationOffboard(Node):
         )
         marker.text = (
             f"{self.flight_phase}\n"
-            f"front {self.format_range(self.lidar_front_min)}m | "
+            f"F {self.format_range(self.lidar_front_min)}m | "
             f"L {self.format_range(self.lidar_left_min)}m | "
             f"R {self.format_range(self.lidar_right_min)}m"
         )
@@ -1286,6 +2170,7 @@ class ExplorationOffboard(Node):
         z_m: Optional[float],
         yaw_rad: Optional[float],
         ramp: bool,
+        horizontal_speed_mps: Optional[float] = None,
     ):
         if ramp:
             x_m, y_m = self.apply_lidar_obstacle_avoidance(
@@ -1295,15 +2180,20 @@ class ExplorationOffboard(Node):
             )
 
         if ramp:
+            horizontal_speed = (
+                self.setpoint_speed_mps
+                if horizontal_speed_mps is None
+                else abs(float(horizontal_speed_mps))
+            )
             x_m = self.ramped_axis(
                 self.commanded_x,
                 x_m,
-                self.setpoint_speed_mps,
+                horizontal_speed,
             )
             y_m = self.ramped_axis(
                 self.commanded_y,
                 y_m,
-                self.setpoint_speed_mps,
+                horizontal_speed,
             )
             z_m = self.ramped_axis(
                 self.commanded_z,
@@ -1352,6 +2242,7 @@ class ExplorationOffboard(Node):
         front = self.lidar_front_min
         left = self.lidar_left_min
         right = self.lidar_right_min
+        emergency_close = min(front, left, right) < self.lidar_emergency_stop_distance_m
         obstacle_close = (
             front < self.lidar_avoid_distance_m
             or left < self.lidar_side_clearance_m
@@ -1385,8 +2276,15 @@ class ExplorationOffboard(Node):
         )
 
         avoidance_reason = "obstacle"
-        if front < self.lidar_hard_stop_distance_m:
-            # Hard stop: don't continue forward. Pick the clearer side.
+        if emergency_close:
+            # At this distance the useful demo behavior is not clever planning;
+            # it is to stop feeding PX4 setpoints farther into the obstacle.
+            desired_forward = min(desired_forward, 0.0)
+            desired_left = 0.0
+            avoidance_reason = "emergency hold"
+        elif front < self.lidar_hard_stop_distance_m:
+            # Hard stop: don't continue forward. Bias only gently to the clearer
+            # side so a narrow cave does not turn avoidance into wall contact.
             desired_forward = min(desired_forward, 0.0)
             side_sign = 1.0 if left >= right else -1.0
             desired_left = side_sign * self.lidar_sidestep_m
@@ -1406,12 +2304,29 @@ class ExplorationOffboard(Node):
             desired_left += side_sign * self.lidar_sidestep_m * (1.0 - scale)
             avoidance_reason = "front avoidance"
 
-        if left < self.lidar_side_clearance_m:
-            desired_left -= self.lidar_sidestep_m
-            avoidance_reason = "left clearance"
-        if right < self.lidar_side_clearance_m:
-            desired_left += self.lidar_sidestep_m
-            avoidance_reason = "right clearance"
+        if not emergency_close:
+            if left < self.lidar_side_clearance_m:
+                desired_left -= self.lidar_sidestep_m
+                avoidance_reason = "left clearance"
+            if right < self.lidar_side_clearance_m:
+                desired_left += self.lidar_sidestep_m
+                avoidance_reason = "right clearance"
+
+            if math.isfinite(left) and math.isfinite(right):
+                # Positive local-left means move left. If the left wall is
+                # closer than the right wall, this term becomes negative.
+                desired_left += self.clamp(
+                    (left - right) * self.lidar_centering_gain,
+                    -self.lidar_sidestep_m,
+                    self.lidar_sidestep_m,
+                )
+
+            if (
+                front < self.lidar_avoid_distance_m
+                or left < self.lidar_side_clearance_m
+                or right < self.lidar_side_clearance_m
+            ):
+                desired_forward = min(desired_forward, self.lidar_local_step_m * 0.4)
 
         desired_left = self.clamp(
             desired_left,
