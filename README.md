@@ -1,11 +1,76 @@
 # Energy Aware Active Exploration of Caves Using a Drone
 
+In ros2_ws there is the following bash file called ros_env.sh: 
+```bash 
+source .venv/bin/activate
+
+export PYTHONPATH=$HOME/ros2_ws/.venv/lib/python3.10/site-packages:$PYTHONPATH
+source install/setup.bash
+```
+It ensures that all packages are installed locally and are sourced when the ros2 node or launch file is run.
+
+
+## Demo Latest Version: 
+Before running each step independently in a new terminal run: 
+```bash
+cd $HOME/ros2_ws
+source ros_env.sh
+```
+### 1. Launch Gazebo and Bridges: 
+```bash
+cd $HOME/ros2_ws
+source ros_env.sh
+ros2 launch cave_exploration gazebo_lidar_visual_bridges.launch.py
+```
+
+### 2. Deploy Update PX4 Models: 
+```bash
+cd $HOME/ros2_ws
+source ros_env.sh
+bash src/cave_exploration/scripts/deploy_px4_model_modify_lidar_2d.sh
+```
+
+### 3. Launch RTAB-Map
+
+Use the RGB-D RTAB-Map path for the demo:
+
+```bash
+cd $HOME/ros2_ws
+source ros_env.sh
+ros2 launch cave_exploration rtabmap.launch.py
+```
+
+
+### 5. Launch RViz With Demo Configuration
+
+This loads the map, exploration markers, lidar scan, and depth points:
+
+```bash
+cd $HOME/ros2_ws
+source ros_env.sh
+ros2 launch cave_exploration rviz_demo.launch.py
+```
+
+If markers do not line up, change RViz `Global Options -> Fixed Frame` to `map`, `odom`, or `base_link`, matching the `marker_frame_id` used by the offboard node.
+
+### 6. Run Autonomous Exploration Offboard Node
+For MPPI-style local planning around rocks while still targeting frontiers:
+
+```bash
+cd $HOME/ros2_ws
+source ros_env.sh
+ros2 launch cave_exploration exploration_mppi.launch.py
+```
+
+This launch defaults to `entry_distance_m:=10.0` before switching to frontier MPPI.
+
+
 ## Demo Quick Start
 
 Always start from the workspace root and source the configured environment first:
 
 ```bash
-cd /home/ibraheem/ros2_ws
+cd $HOME/ros2_ws
 source ros_env.sh
 ```
 
@@ -14,7 +79,7 @@ source ros_env.sh
 Run this after model/SDF changes such as the drone spotlight:
 
 ```bash
-cd /home/ibraheem/ros2_ws
+cd $HOME/ros2_ws
 source ros_env.sh
 bash src/cave_exploration/scripts/deploy_px4_model_modify.sh
 ```
@@ -26,7 +91,7 @@ Fully restart Gazebo/PX4 after deploying. Already-spawned drones will not update
 Normal RGB-D drone:
 
 ```bash
-cd /home/ibraheem/ros2_ws
+cd $HOME/ros2_ws
 source ros_env.sh
 ros2 launch cave_exploration gazebo_bridges.launch.py
 ```
@@ -34,7 +99,7 @@ ros2 launch cave_exploration gazebo_bridges.launch.py
 2D lidar drone for lidar obstacle avoidance:
 
 ```bash
-cd /home/ibraheem/ros2_ws
+cd $HOME/ros2_ws
 source ros_env.sh
 ros2 launch cave_exploration gazebo_lidar_visual_bridges.launch.py
 ```
@@ -44,7 +109,7 @@ ros2 launch cave_exploration gazebo_lidar_visual_bridges.launch.py
 Use the RGB-D RTAB-Map path for the demo:
 
 ```bash
-cd /home/ibraheem/ros2_ws
+cd $HOME/ros2_ws
 source ros_env.sh
 ros2 launch cave_exploration rtabmap.launch.py
 ```
@@ -54,7 +119,7 @@ ros2 launch cave_exploration rtabmap.launch.py
 Run this in its own terminal. PX4 will not get external vision without it.
 
 ```bash
-cd /home/ibraheem/ros2_ws
+cd $HOME/ros2_ws
 source ros_env.sh
 ros2 run cave_exploration ros_odom_to_px4_odom --ros-args -p odom_topic:=/rtabmap/odom
 ```
@@ -64,7 +129,7 @@ ros2 run cave_exploration ros_odom_to_px4_odom --ros-args -p odom_topic:=/rtabma
 This loads the map, exploration markers, lidar scan, and depth points:
 
 ```bash
-cd /home/ibraheem/ros2_ws
+cd $HOME/ros2_ws
 source ros_env.sh
 ros2 launch cave_exploration rviz_demo.launch.py
 ```
@@ -76,7 +141,7 @@ If markers do not line up, change RViz `Global Options -> Fixed Frame` to `map`,
 For the 2D lidar demo:
 
 ```bash
-cd /home/ibraheem/ros2_ws
+cd $HOME/ros2_ws
 source ros_env.sh
 ros2 run cave_exploration exploration_offboard --ros-args \
   -p auto_engage:=true \
@@ -92,7 +157,7 @@ ros2 run cave_exploration exploration_offboard --ros-args \
 For MPPI-style local planning around rocks while still targeting frontiers:
 
 ```bash
-cd /home/ibraheem/ros2_ws
+cd $HOME/ros2_ws
 source ros_env.sh
 ros2 launch cave_exploration exploration_mppi.launch.py
 ```
@@ -102,13 +167,13 @@ This launch defaults to `entry_distance_m:=10.0` before switching to frontier MP
 ### 7. Collect Frontier Vs MPPI Exploration Data
 
 Each run automatically stops after 300 seconds and writes a CSV to
-`/home/ibraheem/ros2_ws/exploration_logs` with PX4 pose, travel distance,
+`$HOME/ros2_ws/exploration_logs` with PX4 pose, travel distance,
 battery, phase, map coverage, frontier counts, and RTAB-Map odometry features.
 
 Frontier-only baseline:
 
 ```bash
-cd /home/ibraheem/ros2_ws
+cd $HOME/ros2_ws
 source ros_env.sh
 ros2 launch cave_exploration exploration_mppi.launch.py \
   mppi_enabled:=false \
@@ -118,7 +183,7 @@ ros2 launch cave_exploration exploration_mppi.launch.py \
 MPPI run:
 
 ```bash
-cd /home/ibraheem/ros2_ws
+cd $HOME/ros2_ws
 source ros_env.sh
 ros2 launch cave_exploration exploration_mppi.launch.py \
   mppi_enabled:=true \
@@ -133,7 +198,7 @@ feature richness.
 Print a quick comparison table:
 
 ```bash
-cd /home/ibraheem/ros2_ws
+cd $HOME/ros2_ws
 source ros_env.sh
 ros2 run cave_exploration compare_exploration_logs
 ```
@@ -211,7 +276,7 @@ The current integrated launch is locked to the modified Oak-D camera model and G
 
 Assumptions:
 
-- ROS 2 workspace root: `/home/ibraheem/ros2_ws`
+- ROS 2 workspace root: `$HOME/ros2_ws`
 - PX4 checkout: `$HOME/PX4-Autopilot`
 - `rtabmap_ros`, `ros_gz_bridge`, and PX4 ROS dependencies are installed in the environment you build from
 
@@ -220,7 +285,7 @@ Assumptions:
 This package contains the custom airframe, Gazebo model, Oak-D model, and cave world. Copy them into PX4 before building or launching:
 
 ```bash
-cd /home/ibraheem/ros2_ws/src/cave_exploration
+cd $HOME/ros2_ws/src/cave_exploration
 bash scripts/deploy_px4_model_modify.sh
 bash scripts/copy_world_file.sh
 ```
@@ -228,7 +293,7 @@ bash scripts/copy_world_file.sh
 If PX4 lives somewhere else:
 
 ```bash
-cd /home/ibraheem/ros2_ws/src/cave_exploration
+cd $HOME/ros2_ws/src/cave_exploration
 bash scripts/deploy_px4_model_modify.sh --px4-dir /path/to/PX4-Autopilot
 bash scripts/copy_world_file.sh --px4-dir /path/to/PX4-Autopilot
 ```
@@ -239,7 +304,7 @@ bash scripts/copy_world_file.sh --px4-dir /path/to/PX4-Autopilot
 cd $HOME/PX4-Autopilot
 make px4_sitl gz_x500_depth_modify
 
-cd /home/ibraheem/ros2_ws
+cd $HOME/ros2_ws
 colcon build --packages-select cave_exploration
 source install/setup.bash
 ```
@@ -251,7 +316,7 @@ The first `make px4_sitl gz_x500_depth_modify` rebuild is important after updati
 From the ROS workspace:
 
 ```bash
-cd /home/ibraheem/ros2_ws
+cd $HOME/ros2_ws
 source install/setup.bash
 ros2 launch cave_exploration cave.launch.py
 ```
@@ -274,7 +339,7 @@ Use this when you want Gazebo, PX4, and RTAB-Map in separate terminals so `pxh>`
 Terminal 1:
 
 ```bash
-cd /home/ibraheem/ros2_ws
+cd $HOME/ros2_ws
 source install/setup.bash
 ros2 launch cave_exploration gazebo_bridges.launch.py
 ```
@@ -289,7 +354,7 @@ make px4_sitl gz_x500_depth_modify
 Terminal 3:
 
 ```bash
-cd /home/ibraheem/ros2_ws
+cd $HOME/ros2_ws
 source install/setup.bash
 ros2 launch cave_exploration rtabmap.launch.py
 ```
